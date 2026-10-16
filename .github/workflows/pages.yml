@@ -5,10 +5,9 @@
 # environment can never overwrite the other.
 name: Deploy to GitHub Pages
 
-# Manual only since 16 Oct: Raffle Win must not be reachable from any public
-# address except through the Telegram bots (raffwin.toko.com.ng and
-# raffwintest.toko.com.ng). The production and staging builds now call the
-# real API under /api, which GitHub Pages does not have.
+# Manual only: Raffle Win must not be reachable from any public address
+# except through its Telegram bots (the live and test hosts). The production
+# and staging builds call the real API under /api, which GitHub Pages does not have.
 on:
   workflow_dispatch:
 

@@ -3,7 +3,7 @@
  * docs/ARCHITECTURE.md section 4 is the full model; tables arrive with the
  * milestone that uses them.
  *
- * Production runs PostgreSQL 14 (jmnews server), development 17: nothing here
+ * Production runs PostgreSQL 14, development 17: nothing here
  * may need a feature newer than 14.
  */
 import { sql } from 'drizzle-orm'

@@ -156,12 +156,12 @@ describe('bot admin sign-in', () => {
       .insert(adminUsers)
       .values({ name: 'First Admin', username: `first_${telegramId()}`, telegramUsername: FIRST_SIGNIN_CLAIM, role: 'super_admin', passwordHash: await hashPassword('pw-first') })
       .returning()
-    const me = { id: telegramId(), username: 'daniel_real' }
+    const me = { id: telegramId(), username: 'first_admin_tg' }
     const h = harness()
     for (const t of ['/staffdesk', MASTER, claimable!.username!, 'pw-first']) await h.send(me, t)
     expect(String(h.calls.filter((c) => c.method === 'sendMessage').at(-1)?.payload.text)).toMatch(/^Signed in as First Admin/)
     const [row] = await db.select().from(adminUsers).where(eq(adminUsers.id, claimable!.id))
-    expect(row).toMatchObject({ telegramId: me.id, telegramUsername: 'daniel_real' })
+    expect(row).toMatchObject({ telegramId: me.id, telegramUsername: 'first_admin_tg' })
     // Claimed: nobody else can use it now
     const other = { id: telegramId(), username: 'someone_else' }
     for (const t of ['/staffdesk', MASTER, claimable!.username!, 'pw-first']) await h.send(other, t)

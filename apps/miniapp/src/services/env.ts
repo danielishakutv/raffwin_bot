@@ -28,7 +28,7 @@ export const env = {
   version: import.meta.env.VITE_APP_VERSION ?? '0.0.0',
   basePath: import.meta.env.BASE_URL,
   /**
-   * Base URL of the Raffle Win API, e.g. https://api.rafflewin.com.ng.
+   * Base URL of the Raffle Win API: /api on the same host in deployed builds.
    * Empty means the in-browser mock API (the GitHub Pages demo).
    */
   apiUrl: (import.meta.env.VITE_API_URL ?? '').trim().replace(/\/+$/, ''),

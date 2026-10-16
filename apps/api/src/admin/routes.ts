@@ -1,6 +1,6 @@
 /**
- * /admin/v1 - served same-origin from admin.rafflewin.com.ng (Apache proxies
- * /admin/v1 to the API), so the session cookie never crosses origins.
+ * /admin/v1 - served same-origin from the app host (Apache proxies
+ * /admin/v1 to the API), so admin requests never cross origins.
  */
 import { Router, type Request } from 'express'
 import { z } from 'zod'

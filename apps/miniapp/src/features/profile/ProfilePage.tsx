@@ -6,7 +6,6 @@ import { startAdminSignIn, usingRealApi } from '@/api'
 import { errorMessage } from '@/api/errors'
 import { getWebApp } from '@/services/telegram'
 import { staggerContainer, popIn } from '@/components/motion'
-import { AboutSoftware } from '@/components/ui/AboutSoftware'
 import { Avatar } from '@/components/ui/Avatar'
 import { Toggle } from '@/components/ui/Field'
 import { formatPhoneDisplay } from '@/services/format'
@@ -115,9 +114,6 @@ export function ProfilePage() {
         </motion.div>
       )}
 
-      <motion.div variants={popIn}>
-        <AboutSoftware />
-      </motion.div>
     </motion.div>
   )
 }

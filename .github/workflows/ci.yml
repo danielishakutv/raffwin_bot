@@ -15,7 +15,7 @@ jobs:
     name: Mini App, API, shared (typecheck, lint, test, build)
     runs-on: ubuntu-latest
     services:
-      # Production runs PostgreSQL 14 on the jmnews server; test against the same major
+      # Production runs PostgreSQL 14; test against the same major version
       postgres:
         image: postgres:14
         env:

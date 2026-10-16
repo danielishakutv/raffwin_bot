@@ -8,7 +8,6 @@ import { BouncyButton } from '@/components/ui/BouncyButton'
 import { Chip } from '@/components/ui/Chip'
 import { cn } from '@/components/ui/cn'
 import { LogoMark } from '@/components/ui/Logo'
-import { MakerFooter } from '@/components/ui/MakerFooter'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { toast } from '@/components/ui/toastStore'
 import { haptics } from '@/services/haptics'
@@ -114,8 +113,6 @@ export function OnboardingPage() {
           </BouncyButton>
         )}
       </div>
-      {/* Authorship lives on the one screen before a player enters (there is no sign-in page) */}
-      {step === 0 && <MakerFooter />}
     </div>
   )
 }

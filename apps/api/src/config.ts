@@ -49,7 +49,7 @@ const schema = z.object({
   GIT_COMMIT: z.string().default('unknown'),
 
   /**
-   * The Mini App's own address, e.g. https://raffwintest.toko.com.ng/ - the
+   * The Mini App's own address, e.g. https://test.example.com/ - the
    * bot's buttons open it, and the webhook lives at <it>/api/telegram/webhook.
    */
   PUBLIC_APP_URL: z.string().url().startsWith('https://', 'Telegram only opens Mini Apps over https').optional(),

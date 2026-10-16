@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Stage C on jmnews: permissions, systemd units, Apache vhosts (temporary self-signed
+# Stage C on the server: permissions, systemd units, Apache vhosts (temporary self-signed
 # TLS until DNS points here), master passwords, first admin, nightly backups.
+# Needs TEST_HOST, LIVE_HOST and the first admin: ADMIN_USERNAME, ADMIN_NAME, ADMIN_TELEGRAM
+# (their Telegram username, or first-signin).
 # Additive: new files only; every existing file it would replace is refused instead.
 # Usage: bash -s -- <git-sha>
 set -euo pipefail
+: "${TEST_HOST:?}" "${LIVE_HOST:?}" "${ADMIN_USERNAME:?}" "${ADMIN_NAME:?}" "${ADMIN_TELEGRAM:?}"
 SHA="$1"
 STAMP=$(date +%F-%H%M)
 SECRETS=/root/raffwin-secrets
@@ -11,7 +14,7 @@ install -d -m 700 "$SECRETS"
 newfile() { if [ -e "$1" ]; then echo "   exists, not replacing: $1"; return 1; fi; return 0; }
 
 declare -A PORT=([raffwintest]=3110 [raffwin]=3120)
-declare -A HOSTN=([raffwintest]=raffwintest.toko.com.ng [raffwin]=raffwin.toko.com.ng)
+declare -A HOSTN=([raffwintest]=$TEST_HOST [raffwin]=$LIVE_HOST)
 
 for env in raffwintest raffwin; do
   host=${HOSTN[$env]}; port=${PORT[$env]}
@@ -78,7 +81,7 @@ UNIT
     ErrorLog  \${APACHE_LOG_DIR}/$host-error.log
     CustomLog \${APACHE_LOG_DIR}/$host-access.log combined
 
-    # Let's Encrypt HTTP-01 (shared challenge folder, as for mutara.ng)
+    # Let's Encrypt HTTP-01 (shared challenge folder)
     ProxyPass /.well-known/acme-challenge/ !
     Alias /.well-known/acme-challenge/ /var/www/acme-challenge/.well-known/acme-challenge/
     <Directory /var/www/acme-challenge/.well-known/acme-challenge/>
@@ -130,10 +133,10 @@ VHOST
 done
 
 # Apache: enable, test, graceful reload (other sites keep serving)
-a2ensite -q raffwintest.toko.com.ng.conf raffwin.toko.com.ng.conf
+a2ensite -q "$TEST_HOST.conf" "$LIVE_HOST.conf"
 if ! apache2ctl configtest; then
   # Never leave a broken config enabled: the next reload by anyone would take every site down
-  a2dissite -q raffwintest.toko.com.ng.conf raffwin.toko.com.ng.conf
+  a2dissite -q "$TEST_HOST.conf" "$LIVE_HOST.conf"
   echo "   !! configtest failed; the two new sites were disabled again; nothing reloaded"
   exit 1
 fi
@@ -152,7 +155,7 @@ for env in raffwintest raffwin; do
   cmd=$(sed -n 's/^ADMIN_BOT_COMMAND=//p' "/srv/$env/shared/.env")
   token_ok=1; grep -q '^BOT_TOKEN=REPLACE_WITH' "/srv/$env/shared/.env" && token_ok=0
   out=$(cd "$rel/api" && sudo -u "$env" -H env BOT_TOKEN_OVERRIDE= \
-        bash -c "$( [ $token_ok = 1 ] && echo '' || echo 'export BOT_TOKEN=1:placeholder-token-for-admin-create-only-0000;' ) node --env-file=/srv/$env/shared/.env dist/create-admin.js --username daniel --name 'Daniel Ishaku' --telegram tokopay --role super_admin" 2>&1)
+        bash -c "$( [ $token_ok = 1 ] && echo '' || echo 'export BOT_TOKEN=1:placeholder-token-for-admin-create-only-0000;' ) node --env-file=/srv/$env/shared/.env dist/create-admin.js --username '$ADMIN_USERNAME' --name '$ADMIN_NAME' --telegram '$ADMIN_TELEGRAM' --role super_admin" 2>&1)
   umask 077
   {
     echo "Raffle Win $env - admin secrets, made $STAMP on $(hostname). Root only. Read, store in your password manager, then move this file out of the way."
@@ -164,7 +167,7 @@ for env in raffwintest raffwin; do
     echo "$out"
   } > "$f"
   chmod 600 "$f"
-  echo "   $env: master password + admin 'daniel' (@tokopay) made; details in $f"
+  echo "   $env: master password + admin '$ADMIN_USERNAME' made; details in $f"
 done
 
 # 6. Nightly database backups (custom-format pg_dump, kept; nothing is pruned)

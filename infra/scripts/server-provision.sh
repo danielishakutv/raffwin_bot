@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Stage A on jmnews: users, folders, databases and env files for raffwintest and raffwin.
+# Stage A on the server: users, folders, databases and env files for raffwintest and raffwin.
+# Needs TEST_HOST and LIVE_HOST, e.g.  TEST_HOST=test.example.com LIVE_HOST=play.example.com bash server-provision.sh
 # Additive and idempotent: never overwrites or removes anything that already exists.
 set -euo pipefail
+: "${TEST_HOST:?set TEST_HOST (the test hostname)}" "${LIVE_HOST:?set LIVE_HOST (the live hostname)}"
 
 gen() { openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n' | cut -c1-"$1"; }
 
@@ -60,8 +62,8 @@ ENV
   echo "   wrote $envfile (secrets generated; BOT_TOKEN still a placeholder)"
 }
 
-setup_env raffwintest 3110 staging raffwin_test_bot https://raffwintest.toko.com.ng/
-setup_env raffwin     3120 production raffwin_bot   https://raffwin.toko.com.ng/
+setup_env raffwintest 3110 staging raffwin_test_bot "https://$TEST_HOST/"
+setup_env raffwin     3120 production raffwin_bot   "https://$LIVE_HOST/"
 
 echo "== check"
 for env in raffwintest raffwin; do

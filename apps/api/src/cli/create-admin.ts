@@ -2,7 +2,7 @@
  * Creates the first admin from the server's shell (after that, super admins
  * add admins from the admin screen):
  *
- *   pnpm --filter @raffwin/api admin:create --username daniel --name "Daniel Ishaku" --telegram ada_obi --role super_admin
+ *   pnpm --filter @raffwin/api admin:create --username owner --name "Owner Name" --telegram owner_handle --role super_admin
  *   ... --telegram first-signin   (first admin only: the first account to complete the bot sign-in claims it)
  *   node --env-file=.env dist/create-admin.js --username ... --name ... --telegram ... --role ...   (on the server)
  *

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage B on jmnews, run per environment after the release has been unpacked into
+# Stage B on the server, run per environment after the release has been unpacked into
 # /srv/$ENV/releases/$REL: install runtime deps as the service user, migrate, point current at it.
 # Usage: bash -s -- <env> <release-name>
 set -euo pipefail
