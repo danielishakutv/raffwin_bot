@@ -1,0 +1,79 @@
+# Deploys BOTH environments to the single GitHub Pages site of this repo:
+#   production (main branch)    -> https://<owner>.github.io/raffwin_bot/
+#   staging    (staging branch) -> https://<owner>.github.io/raffwin_bot/staging/
+# A push to either branch rebuilds both from their current heads, so one
+# environment can never overwrite the other.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (production)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+
+      - name: Checkout staging
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          path: staging
+        continue-on-error: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build production from main
+        working-directory: main
+        run: |
+          npm ci
+          npm run build
+          cp dist/index.html dist/404.html
+
+      - name: Build staging from staging branch
+        if: hashFiles('staging/package.json') != ''
+        working-directory: staging
+        run: |
+          npm ci
+          npm run build:staging
+          cp dist/index.html dist/404.html
+
+      - name: Assemble site
+        run: |
+          mkdir -p site
+          cp -r main/dist/. site/
+          if [ -d staging/dist ]; then mkdir -p site/staging && cp -r staging/dist/. site/staging/; fi
+          touch site/.nojekyll
+          ls -R site | head -40
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
