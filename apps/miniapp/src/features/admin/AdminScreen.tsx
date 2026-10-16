@@ -205,7 +205,7 @@ function Big({ label, value, sub }: { label: string; value: string; sub?: string
 }
 
 function OverviewTab() {
-  const { data: o, error, reload } = useLoad<AdminOverview>('/overview', 10_000)
+  const { data: o, error, reload } = useLoad<AdminOverview>('/overview', 5_000)
   if (error) return <Err message={error} />
   if (!o) return <p>Loading...</p>
   const rows: [string, string][] = [
@@ -314,7 +314,7 @@ function bodyFromForm(f: RaffleForm, rules: string[]) {
 }
 
 function RafflesTab({ can, superAdmin }: { can: string[]; superAdmin: boolean }) {
-  const { data, error, reload } = useLoad<AdminRaffle[]>('/raffles', 15_000)
+  const { data, error, reload } = useLoad<AdminRaffle[]>('/raffles', 5_000)
   const [form, setForm] = useState(emptyRaffle)
   const [editing, setEditing] = useState<AdminRaffle | 'new' | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
@@ -489,8 +489,8 @@ function periodQuery(p: PeriodKey): string {
 function FinanceTab({ can }: { can: string[] }) {
   const [period, setPeriod] = useState<PeriodKey>('all')
   const q = periodQuery(period)
-  const { data: f, error, reload } = useLoad<AdminFinance>(`/finance${q}`, 30_000)
-  const { data: expenses, reload: reloadExpenses } = useLoad<AdminExpense[]>(`/finance/expenses${q}`)
+  const { data: f, error, reload } = useLoad<AdminFinance>(`/finance${q}`, 10_000)
+  const { data: expenses, reload: reloadExpenses } = useLoad<AdminExpense[]>(`/finance/expenses${q}`, 15_000)
   const { data: raffleList } = useLoad<AdminRaffle[]>('/raffles')
   const action = useAction()
   const today = new Date().toISOString().slice(0, 10)
@@ -663,7 +663,7 @@ function FinanceTab({ can }: { can: string[] }) {
 
 function ApprovalsTab({ can }: { can: string[] }) {
   const [status, setStatus] = useState('pending')
-  const { data, error, reload } = useLoad<AdminApproval[]>(`/approvals?status=${status}`, 10_000)
+  const { data, error, reload } = useLoad<AdminApproval[]>(`/approvals?status=${status}`, 5_000)
   const action = useAction()
   const decide = async (id: string, verdict: 'approve' | 'reject') => {
     const note = await askText(verdict === 'approve' ? 'Note (optional)' : 'Why reject?') ?? ''
@@ -718,7 +718,7 @@ function ApprovalsTab({ can }: { can: string[] }) {
 function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boolean }) {
   const [q, setQ] = useState('')
   const [query, setQuery] = useState('')
-  const { data, error } = useLoad<AdminUserSummary[]>(`/users?q=${encodeURIComponent(query)}`)
+  const { data, error } = useLoad<AdminUserSummary[]>(`/users?q=${encodeURIComponent(query)}`, 15_000)
   const [selected, setSelected] = useState<string | null>(null)
   return (
     <>
@@ -744,7 +744,7 @@ function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boolean })
 }
 
 function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string[]; superAdmin: boolean; onBack: () => void }) {
-  const { data: d, error, reload } = useLoad<AdminUserDetail>(`/users/${id}`)
+  const { data: d, error, reload } = useLoad<AdminUserDetail>(`/users/${id}`, 10_000)
   const action = useAction()
   const [done, setDone] = useState<string | null>(null)
   const status = async (to: 'suspend' | 'reinstate') => {

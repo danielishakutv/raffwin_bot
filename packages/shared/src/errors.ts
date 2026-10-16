@@ -5,6 +5,8 @@
 export const API_ERROR_CODES = [
   'INSUFFICIENT_FUNDS',
   'RAFFLE_CLOSED',
+  /** The entry price changed since the player saw it (an admin edited the raffle) */
+  'PRICE_CHANGED',
   'RATE_EXPIRED',
   'PAYMENT_DECLINED',
   'USERNAME_TAKEN',

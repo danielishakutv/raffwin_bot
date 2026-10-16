@@ -3,6 +3,7 @@ import type { ApiErrorCode } from '@raffwin/shared'
 const STATUS: Record<ApiErrorCode, number> = {
   INSUFFICIENT_FUNDS: 409,
   RAFFLE_CLOSED: 409,
+  PRICE_CHANGED: 409,
   RATE_EXPIRED: 409,
   PAYMENT_DECLINED: 402,
   USERNAME_TAKEN: 409,

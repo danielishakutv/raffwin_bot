@@ -50,6 +50,9 @@ export async function enterRaffle(ctx: AppContext, player: UserRow, body: EnterR
       if (raffle.status !== 'open' || raffle.deadline.getTime() <= now) {
         throw new HttpError('RAFFLE_CLOSED', 'Entries for this raffle have closed.')
       }
+      if (body.priceRaffs !== undefined && body.priceRaffs !== raffle.entryPriceRaffs) {
+        throw new HttpError('PRICE_CHANGED', `The entry price is now ${raffle.entryPriceRaffs} Raffs (it was ${body.priceRaffs}). Check it and confirm again.`)
+      }
       const remaining = raffle.entriesTarget - raffle.entriesCount
       if (remaining <= 0) throw new HttpError('RAFFLE_CLOSED', 'This raffle is sold out.')
       if (body.qty > remaining) {

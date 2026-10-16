@@ -60,7 +60,7 @@ export interface AppState {
   expireRateNow: () => void
   refreshRaffles: () => Promise<void>
   /** idempotencyKey: one per confirmation, reused on retry, so a lost reply never makes a second entry */
-  enterRaffle: (raffleId: string, qty: number, idempotencyKey: string) => Promise<api.EnterRaffleResponse>
+  enterRaffle: (raffleId: string, qty: number, idempotencyKey: string, priceRaffs?: number) => Promise<api.EnterRaffleResponse>
   drawRaffle: (raffleId: string) => Promise<{ raffle: Raffle; youWon: boolean }>
   buyRaffs: (req: Omit<api.BuyRaffsRequest, 'rateId'>) => Promise<api.BuyRaffsResponse>
   updateProfile: (patch: Partial<Pick<Profile, 'fullName' | 'phone' | 'email' | 'username'>>) => Promise<void>
@@ -75,6 +75,8 @@ export interface AppState {
 }
 
 let rateInFlight: Promise<void> | null = null
+/** Raffle content versions from the previous live poll (null until the first one) */
+let liveVersions: Map<string, string> | null = null
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -96,12 +98,16 @@ export const useAppStore = create<AppState>()(
       async applyLive(live) {
         const { raffles, balance } = get()
         const known = new Map(raffles.map((r) => [r.id, r]))
-        // A raffle that appeared, disappeared or was just drawn needs its full record (winners, entrants)
+        const seen = liveVersions
+        liveVersions = new Map(live.raffles.map((l) => [l.id, l.version]))
+        // A raffle that appeared, disappeared, was drawn or was edited by an admin needs its full record.
+        // The first poll after opening has nothing to compare with, so it reloads once.
         const structural =
+          seen === null ||
           live.raffles.length !== raffles.length ||
           live.raffles.some((l) => {
             const k = known.get(l.id)
-            return !k || (k.drawnAt ?? null) !== (l.drawnAt ?? null)
+            return !k || (k.drawnAt ?? null) !== (l.drawnAt ?? null) || seen.get(l.id) !== l.version
           })
         if (structural) {
           set({ raffles: await api.getRaffles() })
@@ -197,8 +203,8 @@ export const useAppStore = create<AppState>()(
         set({ raffles })
       },
 
-      async enterRaffle(raffleId, qty, idempotencyKey) {
-        const res = await api.enterRaffle({ raffleId, qty, idempotencyKey })
+      async enterRaffle(raffleId, qty, idempotencyKey, priceRaffs) {
+        const res = await api.enterRaffle({ raffleId, qty, idempotencyKey, priceRaffs })
         set((s) => ({
           balance: res.balance,
           raffles: s.raffles.map((r) => (r.id === res.raffle.id ? res.raffle : r)),

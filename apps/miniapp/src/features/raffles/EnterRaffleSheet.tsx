@@ -30,6 +30,7 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
   const navigate = useNavigate()
   const balance = useAppStore((s) => s.balance)
   const enterRaffle = useAppStore((s) => s.enterRaffle)
+  const refreshRaffles = useAppStore((s) => s.refreshRaffles)
   const { quote } = useRate()
   const [qty, setQty] = useState(1)
   const [step, setStep] = useState<Step>('pick')
@@ -67,7 +68,7 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
     setStep('processing')
     setError(null)
     try {
-      const res = await enterRaffle(raffle.id, qty, attemptKey)
+      const res = await enterRaffle(raffle.id, qty, attemptKey, unit)
       setAttemptKey(crypto.randomUUID())
       setResult({ qty, raffs: res.entry.raffsSpent, entries: res.raffle.entriesCount, ticketFrom: res.entry.ticketFrom, ticketTo: res.entry.ticketTo })
       setStep('success')
@@ -76,7 +77,12 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
       burst({ x: 0.5, y: 0.6 })
     } catch (err) {
       setError(errorMessage(err))
-      setStep(isApiError(err, 'INSUFFICIENT_FUNDS') ? 'pick' : 'error')
+      if (isApiError(err, 'PRICE_CHANGED')) {
+        // Show the new price before anything is charged
+        setAttemptKey(crypto.randomUUID())
+        refreshRaffles().catch((e: unknown) => console.warn('[enter] could not reload raffles after a price change', e))
+      }
+      setStep(isApiError(err, 'INSUFFICIENT_FUNDS') || isApiError(err, 'PRICE_CHANGED') ? 'pick' : 'error')
       sound.play('error')
       haptics.notify('error')
     }

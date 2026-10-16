@@ -122,6 +122,8 @@ export async function liveSnapshot(db: Db, user: { id: string; balanceCache: num
       status: raffles.status,
       deadline: raffles.deadline,
       drawnAt: raffles.drawnAt,
+      // Everything an admin can edit that players see; entry sales leave it alone
+      version: sql<string>`md5(concat_ws('|', ${raffles.prizeName}, ${raffles.model}, ${raffles.category}, ${raffles.kind}, ${raffles.hue}, ${raffles.marketPriceNaira}, ${raffles.entryPriceRaffs}, ${raffles.description}, ${raffles.rules}::text, (select string_agg(p.position || ':' || p.prize_item || ':' || p.prize_type || ':' || p.raffs_value, ',' order by p.position) from raffle_prizes p where p.raffle_id = "raffles"."id")))`,
     })
     .from(raffles)
     .where(or(inArray(raffles.status, ['open', 'drawing']), and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff))))
@@ -135,6 +137,7 @@ export async function liveSnapshot(db: Db, user: { id: string; balanceCache: num
       status: r.status,
       deadline: r.deadline.toISOString(),
       drawnAt: r.drawnAt?.toISOString() ?? null,
+      version: r.version,
     })),
   }
 }

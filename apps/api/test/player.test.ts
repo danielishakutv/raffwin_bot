@@ -81,6 +81,20 @@ describe('GET /v1/raffles', () => {
 })
 
 describe('POST /v1/entries', () => {
+  it('refuses an entry at a price that has changed since the player saw it', async () => {
+    const raffle = await createRaffle(db, { entryPriceRaffs: 40 })
+    const m = await member(http)
+    await credit(db, m.userId, 1000)
+    await db.update(raffles).set({ entryPriceRaffs: 60 }).where(eq(raffles.id, raffle.id))
+    const stale = await m.post('/v1/entries', { raffleId: raffle.id, qty: 1, idempotencyKey: randomUUID(), priceRaffs: 40 })
+    expect(stale.status).toBe(409)
+    expect(stale.body.error).toMatchObject({ code: 'PRICE_CHANGED' })
+    expect(stale.body.error.message).toMatch(/now 60 Raffs/)
+    expect(await balanceOf(m.userId)).toBe(1000)
+    const fresh = await m.post('/v1/entries', { raffleId: raffle.id, qty: 1, idempotencyKey: randomUUID(), priceRaffs: 60 })
+    expect(fresh.status).toBe(201)
+  })
+
   it('charges the fixed Raffs price and assigns contiguous tickets', async () => {
     const raffle = await createRaffle(db, { entryPriceRaffs: 40 })
     const m = await member(http)
@@ -262,6 +276,23 @@ describe('GET /v1/live', () => {
     const mine = await buyer.get('/v1/live')
     expect(mine.headers['cache-control']).toBe('no-store')
     expect(mine.body.balance).toBe(40)
+  })
+
+  it('changes a raffle version when an admin edits it, never when entries sell', async () => {
+    const raffle = await createRaffle(db, { entryPriceRaffs: 20 })
+    const watcher = await member(http)
+    const buyer = await member(http)
+    await credit(db, buyer.userId, 100)
+    const versionOf = async () => ((await watcher.get('/v1/live')).body as LiveSnapshot).raffles.find((r) => r.id === raffle.id)?.version
+    const v1 = await versionOf()
+    expect(v1).toMatch(/^[0-9a-f]{32}$/)
+    await enter(buyer, raffle.id, 2)
+    expect(await versionOf()).toBe(v1)
+    await db.update(raffles).set({ entryPriceRaffs: 25 }).where(eq(raffles.id, raffle.id))
+    const v2 = await versionOf()
+    expect(v2).not.toBe(v1)
+    await db.update(raffles).set({ description: 'Now with a case' }).where(eq(raffles.id, raffle.id))
+    expect(await versionOf()).not.toBe(v2)
   })
 
   it('never lists drafts or cancelled raffles', async () => {

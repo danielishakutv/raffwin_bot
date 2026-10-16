@@ -71,6 +71,8 @@ export const enterRaffleBody = z.object({
   qty: z.number().int().min(1).max(MAX_QTY_PER_ENTRY, `At most ${MAX_QTY_PER_ENTRY} entries at a time`),
   /** One per confirmation tap: a retry with the same key returns the same entry, never a second one */
   idempotencyKey: z.string().uuid(),
+  /** The price per entry the player confirmed; refused with PRICE_CHANGED if it is no longer the price */
+  priceRaffs: z.number().int().min(1).optional(),
 })
 
 export const cursorQuery = z.object({

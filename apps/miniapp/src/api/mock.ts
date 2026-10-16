@@ -252,6 +252,8 @@ export async function getLive(): Promise<LiveSnapshot> {
       status: r.drawnAt ? 'drawn' : 'open',
       deadline: r.deadline,
       drawnAt: r.drawnAt,
+      // Local demo data is never edited by an admin
+      version: r.id,
     })),
   }
 }
@@ -273,6 +275,8 @@ export interface EnterRaffleRequest {
   qty: number
   /** One per confirmation tap: a retry with the same key never makes a second entry */
   idempotencyKey: string
+  /** Price per entry the player confirmed; the API refuses if it has changed */
+  priceRaffs?: number
 }
 
 export interface EnterRaffleResponse {

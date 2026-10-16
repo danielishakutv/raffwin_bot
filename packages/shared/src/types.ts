@@ -139,7 +139,16 @@ export interface ReferralEarning {
 export interface LiveSnapshot {
   serverTime: number
   balance: number
-  raffles: { id: string; entriesCount: number; entriesTarget: number; status: string; deadline: string; drawnAt: string | null }[]
+  raffles: {
+    id: string
+    entriesCount: number
+    entriesTarget: number
+    status: string
+    deadline: string
+    drawnAt: string | null
+    /** Changes whenever an admin edits what players see (price, prizes, text); entries do not change it */
+    version: string
+  }[]
 }
 
 /** One page of a cursor-paginated list. nextCursor is null on the last page. */
