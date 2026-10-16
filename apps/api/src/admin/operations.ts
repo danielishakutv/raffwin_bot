@@ -106,7 +106,7 @@ function slugify(name: string): string {
   return `${base || 'raffle'}-${randomUUID().slice(0, 6)}`
 }
 
-export async function createRaffle(ctx: AppContext, adminId: string, body: RaffleBody): Promise<AdminRaffle> {
+export async function createRaffle(ctx: AppContext, adminId: string | null, body: RaffleBody): Promise<AdminRaffle> {
   const id = await ctx.db.transaction(async (tx) => {
     const { prizes, deadline, ...fields } = body
     const [row] = await tx
@@ -147,7 +147,7 @@ export async function updateRaffle(ctx: AppContext, adminId: string, id: string,
   return getRaffle(ctx, id)
 }
 
-export async function openRaffle(ctx: AppContext, adminId: string, id: string): Promise<AdminRaffle> {
+export async function openRaffle(ctx: AppContext, adminId: string | null, id: string): Promise<AdminRaffle> {
   await ctx.db.transaction(async (tx) => {
     const [row] = await tx.select().from(raffles).where(eq(raffles.id, id)).for('update')
     if (!row) throw new HttpError('NOT_FOUND', 'No such raffle.')
