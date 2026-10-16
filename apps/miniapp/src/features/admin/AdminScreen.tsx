@@ -20,6 +20,7 @@ import type {
 import type { Page } from '@raffwin/shared'
 import { errorMessage } from '@/api/errors'
 import { create } from 'zustand'
+import { env } from '@/services/env'
 import { adminCall, useAdminSession } from './adminSession'
 
 /** An inline text prompt (window.prompt is unreliable inside Telegram's webview). */
@@ -140,6 +141,9 @@ export function AdminScreen() {
     <div className="fixed inset-0 overflow-auto bg-white font-sans text-black">
       <AskPanel />
       <header className="sticky top-0 z-10 border-b border-black bg-white p-3">
+        <p className={`-mx-3 -mt-3 mb-2 px-3 py-1 text-[12px] font-bold ${env.isProduction ? 'bg-black text-white' : 'border-b border-black bg-white text-black'}`}>
+          {env.isProduction ? `LIVE: @${env.botUsername}, real players and raffles` : `TEST: @${env.botUsername}, sample data, nothing here reaches the live app`}
+        </p>
         <div className="flex items-center justify-between">
           <div>
             <p className="text-[15px] font-bold">Admin: {me.name} ({me.role})</p>

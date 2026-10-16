@@ -3,7 +3,7 @@ import type { Transformer } from 'grammy'
 import { pino } from 'pino'
 import { describe, expect, it } from 'vitest'
 import { hashPassword } from '../src/admin/session'
-import { FIRST_SIGNIN_CLAIM } from '../src/bot/admin-login'
+import { FIRST_SIGNIN_CLAIM, masterPrompt } from '../src/bot/admin-login'
 import { createBot } from '../src/bot/bot'
 import { adminUsers, referralHints, securityEvents, users } from '../src/db/schema'
 import { member } from './fixtures'
@@ -88,7 +88,7 @@ describe('bot admin sign-in', () => {
 
     expect(h.deleted()).toEqual([m1, m2, m3])
     expect(h.replies().slice(0, 3)).toEqual([
-      'Admin sign-in. Send the master password. Each message is deleted as soon as it is read.',
+      masterPrompt(ctx.config),
       'Admin username?',
       'Admin password?',
     ])
@@ -183,7 +183,7 @@ describe('bot admin sign-in', () => {
 
     const start = await http.post('/v1/admin-signin').set(auth)
     expect(start.status, JSON.stringify(start.body)).toBe(200)
-    expect(sent).toEqual([{ chatId: me.id, text: 'Admin sign-in. Send the master password. Each message is deleted as soon as it is read.' }])
+    expect(sent).toEqual([{ chatId: me.id, text: masterPrompt(ctx.config) }])
 
     // The conversation continues in the chat exactly as after the hidden command
     const h = harness()
@@ -286,5 +286,12 @@ describe('invites through the bot (/start ref_<code>)', () => {
     const h = harness()
     await h.send({ id: friend }, '/start ref_ZZZZZZZZ')
     expect((await firstOpen(friend))?.referredByUserId).toBeNull()
+  })
+})
+
+describe('the sign-in prompt names its environment', () => {
+  it('says LIVE on production and TEST everywhere else', () => {
+    expect(masterPrompt({ NODE_ENV: 'production', BOT_USERNAME: 'raffwin_bot' })).toMatch(/^LIVE admin sign-in \(@raffwin_bot.*Send the LIVE master password/)
+    expect(masterPrompt({ NODE_ENV: 'staging', BOT_USERNAME: 'raffwin_test_bot' })).toMatch(/^TEST admin sign-in \(@raffwin_test_bot.*Send the TEST master password/)
   })
 })

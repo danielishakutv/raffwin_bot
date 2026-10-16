@@ -36,7 +36,7 @@ export function installAdminLogin(bot: Bot, app: AppContext, appUrl: string): vo
   bot.command(command, async (ctx) => {
     if (ctx.chat?.type !== 'private' || !ctx.from) return
     const started = await startAdminSignIn(app, ctx.from.id, ctx.chat.id, 'command')
-    await ctx.reply(started === 'locked' ? FAILED_REPLY : MASTER_PROMPT)
+    await ctx.reply(started === 'locked' ? FAILED_REPLY : masterPrompt(app.config))
   })
 
   // Runs before the generic message handler; passes through anything that is not part of a sign-in
@@ -105,7 +105,17 @@ export function installAdminLogin(bot: Bot, app: AppContext, appUrl: string): vo
   })
 }
 
-export const MASTER_PROMPT = 'Admin sign-in. Send the master password. Each message is deleted as soon as it is read.'
+/**
+ * Names the environment first: test and live have different master passwords
+ * and admin passwords, and mixing them up looked like "the admin shows demo data".
+ */
+export function masterPrompt(config: { NODE_ENV: string; BOT_USERNAME: string }): string {
+  const where =
+    config.NODE_ENV === 'production'
+      ? `LIVE admin sign-in (@${config.BOT_USERNAME}: real players, real raffles).`
+      : `TEST admin sign-in (@${config.BOT_USERNAME}: sample data only, nothing here reaches the live app).`
+  return `${where} Send the ${config.NODE_ENV === 'production' ? 'LIVE' : 'TEST'} master password. Each message is deleted as soon as it is read.`
+}
 
 /**
  * Puts a Telegram account at the first step (master password) of the sign-in.

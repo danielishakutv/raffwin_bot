@@ -25,7 +25,7 @@ import { recentTransactions } from '../services/ledger'
 import * as raffles from '../services/raffles'
 import { currentQuote, toRateQuote } from '../services/rates'
 import * as referrals from '../services/referrals'
-import { MASTER_PROMPT, startAdminSignIn } from '../bot/admin-login'
+import { masterPrompt, startAdminSignIn } from '../bot/admin-login'
 import { authOf, requestMeta, requireAuth } from './middleware'
 
 export function v1Routes(ctx: AppContext): Router {
@@ -133,7 +133,7 @@ export function v1Routes(ctx: AppContext): Router {
     if (started === 'locked') throw new HttpError('RATE_LIMITED', 'Too many failed admin sign-ins. Try again in an hour.')
     if (!ctx.sendTelegram) throw new HttpError('NOT_READY', 'The bot cannot send messages from this server.')
     try {
-      await ctx.sendTelegram(user.telegramId, MASTER_PROMPT)
+      await ctx.sendTelegram(user.telegramId, masterPrompt(ctx.config))
     } catch (error) {
       ctx.log.warn({ err: error, telegramId: user.telegramId }, 'admin sign-in prompt not delivered')
       throw new HttpError('SERVER_ERROR', 'The bot could not message you. Open the bot chat, press Start, then try again.')
