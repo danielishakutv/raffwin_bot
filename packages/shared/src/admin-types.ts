@@ -23,6 +23,7 @@ export interface AdminPrize {
   prizeItem: string
   prizeType: 'physical' | 'raffs_credit'
   raffsValue: number
+  costNaira: number
   winnerUsername: string | null
   winnerTicket: number | null
 }
@@ -129,7 +130,9 @@ export interface AdminAuditRow {
 }
 
 export interface AdminOverview {
-  users: { total: number; signedUp: number; signedUpToday: number }
+  users: { total: number; signedUp: number; signedUpToday: number; activeLast7Days: number }
+  /** All time: Raffs spent on entries (net of refunds) and their Naira value at the current base rate */
+  raised: { raffs: number; naira: number; nairaPerRaff: number }
   entries: { today: number; raffsToday: number }
   raffles: { open: number; drafts: number }
   /** Sum of every balance: Raffs Raffle Win owes its players */
@@ -139,6 +142,74 @@ export interface AdminOverview {
   pendingApprovals: number
   securityLast24h: Record<'low' | 'medium' | 'high' | 'critical', number>
   rate: { starsPerRaff: number; baseStarsPerRaff: number; movePct: number; expiresAt: string }
+}
+
+export interface AdminExpense {
+  id: string
+  raffleId: string | null
+  raffleName: string | null
+  category: string
+  amountNaira: number
+  spentOn: string
+  note: string
+  createdBy: string
+  voidedAt: string | null
+  voidReason: string | null
+}
+
+export interface FinancePrize {
+  position: 1 | 2 | 3
+  prizeItem: string
+  prizeType: 'physical' | 'raffs_credit'
+  /** Physical: what you paid. Raffs credit: its Raffs value at the report rate */
+  costNaira: number
+  raffsValue: number
+}
+
+export interface FinanceRaffle {
+  id: string
+  prizeName: string
+  status: string
+  deadline: string
+  entryPriceRaffs: number
+  entriesSold: number
+  entriesTarget: number
+  /** Raffs spent on entries in the period, net of refunds */
+  raisedRaffs: number
+  raisedNaira: number
+  refundedRaffs: number
+  prizes: FinancePrize[]
+  /** Counted for open, drawing and drawn raffles; 0 for drafts and cancelled ones */
+  prizeCostNaira: number
+  referralRaffs: number
+  referralNaira: number
+  expensesNaira: number
+  /** raised - prize cost - referral payouts - linked expenses */
+  marginNaira: number
+}
+
+export interface AdminFinance {
+  period: { from: string | null; to: string | null }
+  /** Report rate: base Stars per Raff x Naira per Star (display setting) */
+  nairaPerRaff: number
+  nairaPerStar: number
+  raffles: FinanceRaffle[]
+  totals: {
+    raisedRaffs: number
+    raisedNaira: number
+    prizeCostNaira: number
+    referralNaira: number
+    raffleExpensesNaira: number
+    generalExpensesNaira: number
+    /** Sum of raffle margins minus general expenses */
+    profitNaira: number
+  }
+  /** Real money in: Telegram Stars paid for Raffs */
+  cash: { starsReceived: number; starsNaira: number; raffsSold: number }
+  /** Raffs handed out without payment in the period: bonuses, admin credits, Raffs prizes, referral pay */
+  freeRaffs: { bonus: number; adjustments: number; prizes: number; referrals: number }
+  /** Raffs players hold right now: what Raffle Win owes in entries */
+  outstandingRaffs: number
 }
 
 export interface AdminSettings {

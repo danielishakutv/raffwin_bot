@@ -71,6 +71,7 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
         prizeItem: x.p.prizeItem,
         prizeType: x.p.prizeType,
         raffsValue: x.p.raffsValue,
+        costNaira: x.p.costNaira,
         winnerUsername: x.winner,
         winnerTicket: x.p.winnerTicket,
       })),
@@ -123,11 +124,34 @@ export async function createRaffle(ctx: AppContext, adminId: string | null, body
 }
 
 /** Drafts only: once a raffle opens, its price, size and prizes are fixed. */
-export async function updateRaffle(ctx: AppContext, adminId: string, id: string, body: RaffleBody): Promise<AdminRaffle> {
+/**
+ * Drafts: anyone with raffles.write. Open raffles: super admins only, and the
+ * stock can never drop below what is already sold, nor the deadline into the
+ * past. Drawn and cancelled raffles are history and cannot change.
+ */
+export async function updateRaffle(
+  ctx: AppContext,
+  adminId: string,
+  id: string,
+  body: RaffleBody,
+  superAdmin = false,
+): Promise<AdminRaffle> {
   await ctx.db.transaction(async (tx) => {
     const [row] = await tx.select().from(raffles).where(eq(raffles.id, id)).for('update')
     if (!row) throw new HttpError('NOT_FOUND', 'No such raffle.')
-    if (row.status !== 'draft') throw new HttpError('INVALID_INPUT', 'Only drafts can be edited. An open raffle can only be cancelled.')
+    if (row.status === 'open') {
+      if (!superAdmin) throw new HttpError('FORBIDDEN', 'Only a super admin can change a raffle that is open for entries.')
+      if (body.entriesTarget < row.entriesCount) {
+        throw new HttpError('INVALID_INPUT', `${row.entriesCount} entries are already sold; the total cannot be lower.`, {
+          entriesTarget: `At least ${row.entriesCount}`,
+        })
+      }
+      if (new Date(body.deadline).getTime() <= ctx.now()) {
+        throw new HttpError('INVALID_INPUT', 'An open raffle needs a deadline in the future.', { deadline: 'In the past' })
+      }
+    } else if (row.status !== 'draft') {
+      throw new HttpError('INVALID_INPUT', `This raffle is ${row.status}; it can no longer be changed.`)
+    }
     const before = await getRaffle(ctx, id)
     const { prizes, deadline, ...fields } = body
     await tx
@@ -140,10 +164,28 @@ export async function updateRaffle(ctx: AppContext, adminId: string, id: string,
         .values({ ...p, raffleId: id })
         .onConflictDoUpdate({
           target: [rafflePrizes.raffleId, rafflePrizes.position],
-          set: { prizeItem: p.prizeItem, prizeType: p.prizeType, raffsValue: p.raffsValue },
+          set: { prizeItem: p.prizeItem, prizeType: p.prizeType, raffsValue: p.raffsValue, costNaira: p.costNaira },
         })
     }
     await appendAudit(tx, { adminId, action: 'raffle.update', targetType: 'raffle', targetId: id, before, after: body })
+  })
+  return getRaffle(ctx, id)
+}
+
+/** Open -> draft (hidden from players). Refused once anyone has entered: cancel it instead, which refunds them. */
+export async function unpublishRaffle(ctx: AppContext, adminId: string, id: string, reason: string): Promise<AdminRaffle> {
+  await ctx.db.transaction(async (tx) => {
+    const [row] = await tx.select().from(raffles).where(eq(raffles.id, id)).for('update')
+    if (!row) throw new HttpError('NOT_FOUND', 'No such raffle.')
+    if (row.status !== 'open') throw new HttpError('INVALID_INPUT', `Only an open raffle can be unpublished; this one is ${row.status}.`)
+    if (row.entriesCount > 0) {
+      throw new HttpError(
+        'INVALID_INPUT',
+        `${row.entriesCount} entr${row.entriesCount === 1 ? 'y is' : 'ies are'} already sold. Cancel the raffle instead: that refunds everyone.`,
+      )
+    }
+    await tx.update(raffles).set({ status: 'draft', updatedAt: sql`now()` }).where(eq(raffles.id, id))
+    await appendAudit(tx, { adminId, action: 'raffle.unpublish', targetType: 'raffle', targetId: id, before: { status: 'open' }, after: { status: 'draft', reason } })
   })
   return getRaffle(ctx, id)
 }
@@ -378,6 +420,7 @@ export async function overview(ctx: AppContext): Promise<AdminOverview> {
       total: sql<number>`count(*)::int`,
       signedUp: sql<number>`count(${users.signedUpAt})::int`,
       today: sql<number>`count(*) filter (where ${users.signedUpAt} >= ${dayStart})::int`,
+      active7: sql<number>`count(*) filter (where ${users.lastSeenAt} >= ${new Date(now - 7 * 86_400_000)})::int`,
       outstanding: sql<number>`coalesce(sum(${users.balanceCache}), 0)::int`,
     })
     .from(users)
@@ -398,11 +441,21 @@ export async function overview(ctx: AppContext): Promise<AdminOverview> {
     .from(securityEvents)
     .where(gte(securityEvents.occurredAt, new Date(now - 86_400_000)))
     .groupBy(securityEvents.severity)
+  const [raisedRow] = await ctx.db
+    .select({
+      spent: sql<number>`coalesce((select sum(raffs_spent) from ${entries}), 0)::int`,
+      refunded: sql<number>`coalesce((select sum(raffs) from ${ledger} where type = 'refund'), 0)::int`,
+    })
+    .from(sql`(select 1) as one`)
+  const settingsNow = await getSettingsView(ctx)
+  const nairaPerRaff = settingsNow.baseStarsPerRaff * settingsNow.nairaPerStar
+  const raisedRaffs = (raisedRow?.spent ?? 0) - (raisedRow?.refunded ?? 0)
   const quote = await currentQuote(ctx.db, now)
   const securityLast24h = { low: 0, medium: 0, high: 0, critical: 0 }
   for (const s of sev) securityLast24h[s.severity] = s.n
   return {
-    users: { total: u?.total ?? 0, signedUp: u?.signedUp ?? 0, signedUpToday: u?.today ?? 0 },
+    users: { total: u?.total ?? 0, signedUp: u?.signedUp ?? 0, signedUpToday: u?.today ?? 0, activeLast7Days: u?.active7 ?? 0 },
+    raised: { raffs: raisedRaffs, naira: Math.round(raisedRaffs * nairaPerRaff), nairaPerRaff },
     entries: { today: e?.n ?? 0, raffsToday: e?.raffs ?? 0 },
     raffles: { open: r?.open ?? 0, drafts: r?.drafts ?? 0 },
     raffsOutstanding: u?.outstanding ?? 0,

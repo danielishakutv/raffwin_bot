@@ -11,6 +11,8 @@ const prize = z.object({
   prizeItem: z.string().trim().min(2).max(120),
   prizeType: z.enum(['physical', 'raffs_credit']),
   raffsValue: z.number().int().min(0).max(10_000_000).default(0),
+  /** What the prize costs to buy, in Naira (physical prizes), for the finance report */
+  costNaira: z.number().int().min(0).max(1_000_000_000).default(0),
 })
 
 export const raffleBody = z
@@ -66,7 +68,19 @@ export const decisionBody = z.object({
   note: z.string().trim().max(500).default(''),
 })
 
+export const EXPENSE_CATEGORIES = ['prize_purchase', 'delivery', 'marketing', 'fees', 'operations', 'other'] as const
+
+export const expenseBody = z.object({
+  /** Link to a raffle (its prize delivery, its ads), or leave out for a general cost */
+  raffleId: z.string().uuid().nullable().default(null),
+  category: z.enum(EXPENSE_CATEGORIES),
+  amountNaira: z.number().int().min(1, 'Enter an amount').max(1_000_000_000),
+  spentOn: z.string().datetime({ offset: true }),
+  note: z.string().trim().min(3, 'Say what it was for').max(300),
+})
+
 export type RaffleBody = z.infer<typeof raffleBody>
+export type ExpenseBody = z.infer<typeof expenseBody>
 export type RateBaseBody = z.infer<typeof rateBaseBody>
 export type LimitsBody = z.infer<typeof limitsBody>
 export type AdjustmentBody = z.infer<typeof adjustmentBody>

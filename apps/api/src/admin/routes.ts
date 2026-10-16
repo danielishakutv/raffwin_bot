@@ -7,6 +7,7 @@ import { z } from 'zod'
 import {
   adjustmentBody,
   decisionBody,
+  expenseBody,
   limitsBody,
   raffleBody,
   rateBaseBody,
@@ -20,12 +21,14 @@ import { raffles, users } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { requestMeta } from '../http/middleware'
 import { getSetting } from '../services/settings'
-import { decide, listApprovals, requestApproval } from './approvals'
+import { decide, executeDirect, listApprovals, requestApproval } from './approvals'
 import { verifyChain } from './audit'
 import * as ops from './operations'
 import { permissionsOf } from './permissions'
 import { adminOf, auditEveryRequest, exchangeTicket, logout, requireAdmin, requirePermission } from './session'
 import * as admins from './admins'
+import * as finance from './finance'
+import type { Period } from './finance'
 
 const uuid = z.string().uuid()
 
@@ -48,6 +51,18 @@ export function adminRoutes(ctx: AppContext): Router {
   const authed = requireAdmin(ctx)
   const perm = (p: Parameters<typeof requirePermission>[1]) => requirePermission(ctx, p)
   const adminId = (req: Request) => adminOf(req).user.id
+  const isSuper = (req: Request) => adminOf(req).user.role === 'super_admin'
+  /** Super admins act at once (still recorded); everyone else queues it for a second admin */
+  const askOrRun = async <A extends Parameters<typeof requestApproval>[2]>(
+    req: Request,
+    res: import('express').Response,
+    action: A,
+    payload: Parameters<typeof requestApproval<A>>[3],
+    reason: string,
+  ) => {
+    if (isSuper(req)) res.status(200).json(await executeDirect(ctx, adminId(req), action, payload, reason))
+    else res.status(202).json(await requestApproval(ctx, adminId(req), action, payload, reason))
+  }
 
   /* Session ---------------------------------------------------------------- */
 
@@ -91,10 +106,15 @@ export function adminRoutes(ctx: AppContext): Router {
     res.status(201).json(await ops.createRaffle(ctx, adminId(req), raffleBody.parse(req.body)))
   })
   r.put('/raffles/:id', authed, perm('raffles.write'), async (req, res) => {
-    res.json(await ops.updateRaffle(ctx, adminId(req), idParam(req), raffleBody.parse(req.body)))
+    res.json(await ops.updateRaffle(ctx, adminId(req), idParam(req), raffleBody.parse(req.body), isSuper(req)))
   })
   r.post('/raffles/:id/open', authed, perm('raffles.write'), async (req, res) => {
     res.json(await ops.openRaffle(ctx, adminId(req), idParam(req)))
+  })
+  // Back to draft (hidden from players); only while nobody has entered
+  r.post('/raffles/:id/unpublish', authed, perm('raffles.write'), async (req, res) => {
+    const { reason } = reasonBody.parse(req.body)
+    res.json(await ops.unpublishRaffle(ctx, adminId(req), idParam(req), reason))
   })
   r.post('/raffles/:id/cancel', authed, perm('raffles.cancel.request'), async (req, res) => {
     const { reason } = reasonBody.parse(req.body)
@@ -104,17 +124,7 @@ export function adminRoutes(ctx: AppContext): Router {
     if (raffle.status === 'drawn' || raffle.status === 'cancelled') {
       throw new HttpError('INVALID_INPUT', `This raffle is already ${raffle.status}.`)
     }
-    res
-      .status(202)
-      .json(
-        await requestApproval(
-          ctx,
-          adminId(req),
-          'raffle_cancel',
-          { raffleId: id, prizeName: raffle.prizeName, entriesCount: raffle.entriesCount },
-          reason,
-        ),
-      )
+    await askOrRun(req, res, 'raffle_cancel', { raffleId: id, prizeName: raffle.prizeName, entriesCount: raffle.entriesCount }, reason)
   })
 
   /* Users ------------------------------------------------------------------ */
@@ -143,9 +153,7 @@ export function adminRoutes(ctx: AppContext): Router {
     const id = idParam(req)
     const [u] = await ctx.db.select({ username: users.username }).from(users).where(eq(users.id, id))
     if (!u) throw new HttpError('NOT_FOUND', 'No such user.')
-    res
-      .status(202)
-      .json(await requestApproval(ctx, adminId(req), 'balance_adjustment', { userId: id, username: u.username, raffs: body.raffs }, body.reason))
+    await askOrRun(req, res, 'balance_adjustment', { userId: id, username: u.username, raffs: body.raffs }, body.reason)
   })
 
   /* Settings --------------------------------------------------------------- */
@@ -159,15 +167,7 @@ export function adminRoutes(ctx: AppContext): Router {
   r.post('/settings/rate-base', authed, perm('settings.rate.request'), async (req, res) => {
     const body = rateBaseBody.parse(req.body)
     const previousMicro = await getSetting(ctx.db, 'rate.base_stars_per_raff_micro')
-    res.status(202).json(
-      await requestApproval(
-        ctx,
-        adminId(req),
-        'rate_base_change',
-        { starsPerRaffMicro: Math.round(body.starsPerRaff * 1e6), previousMicro },
-        body.reason,
-      ),
-    )
+    await askOrRun(req, res, 'rate_base_change', { starsPerRaffMicro: Math.round(body.starsPerRaff * 1e6), previousMicro }, body.reason)
   })
 
   /* Approvals -------------------------------------------------------------- */
@@ -183,6 +183,28 @@ export function adminRoutes(ctx: AppContext): Router {
   r.post('/approvals/:id/reject', authed, perm('approvals.decide'), async (req, res) => {
     const { note } = decisionBody.parse(req.body ?? {})
     res.json(await decide(ctx, adminId(req), idParam(req), 'reject', note))
+  })
+
+  /* Finance (super_admin and finance) --------------------------------------- */
+
+  const periodOf = (req: Request): Period => {
+    const q = z
+      .object({ from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional() })
+      .parse({ from: req.query.from || undefined, to: req.query.to || undefined })
+    return { from: q.from ? new Date(q.from) : null, to: q.to ? new Date(q.to) : null }
+  }
+  r.get('/finance', authed, perm('finance.read'), async (req, res) => {
+    res.json(await finance.report(ctx, periodOf(req)))
+  })
+  r.get('/finance/expenses', authed, perm('finance.read'), async (req, res) => {
+    res.json(await finance.listExpenses(ctx, periodOf(req)))
+  })
+  r.post('/finance/expenses', authed, perm('finance.write'), async (req, res) => {
+    res.status(201).json(await finance.addExpense(ctx, adminId(req), expenseBody.parse(req.body)))
+  })
+  r.post('/finance/expenses/:id/void', authed, perm('finance.write'), async (req, res) => {
+    const { reason } = reasonBody.parse(req.body)
+    res.json(await finance.voidExpense(ctx, adminId(req), idParam(req), reason))
   })
 
   /* Admins (super_admin) ---------------------------------------------------- */

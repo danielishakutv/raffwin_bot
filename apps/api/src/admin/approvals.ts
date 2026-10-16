@@ -65,6 +65,54 @@ export async function requestApproval<A extends Action>(
   return (await listApprovals(ctx, { id: row.id }))[0] as AdminApproval
 }
 
+/**
+ * A super admin's version of requestApproval: the action runs at once, in one
+ * transaction, and is still written to the approvals history (status
+ * approved, no second admin) and the audit log as done directly.
+ */
+export async function executeDirect<A extends Action>(
+  ctx: AppContext,
+  adminId: string,
+  action: A,
+  payload: Payloads[A],
+  reason: string,
+): Promise<AdminApproval> {
+  let id: string
+  try {
+    id = await ctx.db.transaction(async (tx) => {
+      const result = await execute(tx, action, payload as never, adminId)
+      const [row] = await tx
+        .insert(approvals)
+        .values({
+          action,
+          payload,
+          reason,
+          status: 'approved',
+          requestedByAdminId: adminId,
+          decidedAt: new Date(ctx.now()),
+          result: { ...result, direct: true },
+          expiresAt: new Date(ctx.now()),
+        })
+        .returning({ id: approvals.id })
+      if (!row) throw new Error('approval insert returned no row')
+      await appendAudit(tx, {
+        adminId,
+        action: `direct.${action}`,
+        targetType: 'approval',
+        targetId: row.id,
+        after: { payload, reason, result },
+      })
+      return row.id
+    })
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    ctx.log.error({ err: error, action }, 'direct action failed')
+    throw new HttpError('INVALID_INPUT', `That did not work: ${message}`)
+  }
+  return (await listApprovals(ctx, { id }))[0] as AdminApproval
+}
+
 export async function listApprovals(ctx: AppContext, filter: { status?: string; id?: string } = {}): Promise<AdminApproval[]> {
   // Outer columns named explicitly (see referrals.people for why)
   const requester = sql<string>`(select a.name from ${adminUsers} a where a.id = "approvals"."requested_by_admin_id")`
@@ -89,7 +137,7 @@ export async function listApprovals(ctx: AppContext, filter: { status?: string; 
     reason: a.reason,
     status: a.status,
     requestedBy,
-    decidedBy,
+    decidedBy: decidedBy ?? (a.status === 'approved' ? 'done directly (super admin)' : null),
     decidedAt: a.decidedAt?.toISOString() ?? null,
     result: a.result,
     expiresAt: a.expiresAt.toISOString(),

@@ -50,6 +50,13 @@
       "when": 1792182114315,
       "tag": "0006_m2e_referral_hints",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792184733060,
+      "tag": "0007_m3_finance",
+      "breakpoints": true
     }
   ]
 }

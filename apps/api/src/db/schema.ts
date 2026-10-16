@@ -286,6 +286,8 @@ export const rafflePrizes = pgTable(
     prizeType: text('prize_type', { enum: ['physical', 'raffs_credit'] }).notNull(),
     /** For raffs_credit prizes: credited to the winner by the draw */
     raffsValue: integer('raffs_value').notNull().default(0),
+    /** What this prize costs Raffle Win to buy, in Naira (physical prizes); for finance */
+    costNaira: integer('cost_naira').notNull().default(0),
     winnerUserId: uuid('winner_user_id').references(() => users.id),
     winnerTicket: integer('winner_ticket'),
     fulfilmentStatus: text('fulfilment_status', {
@@ -537,6 +539,33 @@ export const approvals = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('approvals_status_idx').on(t.status, t.createdAt)],
+)
+
+export const EXPENSE_CATEGORIES = ['prize_purchase', 'delivery', 'marketing', 'fees', 'operations', 'other'] as const
+
+/**
+ * Money spent, recorded by finance admins: per raffle (delivery of its prize,
+ * its ads) or general (servers, fees). Never deleted: a wrong entry is voided
+ * with a reason and stops counting.
+ */
+export const financeExpenses = pgTable(
+  'finance_expenses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    raffleId: uuid('raffle_id').references(() => raffles.id),
+    category: text('category', { enum: EXPENSE_CATEGORIES }).notNull(),
+    amountNaira: integer('amount_naira').notNull(),
+    spentOn: timestamp('spent_on', { withTimezone: true }).notNull(),
+    note: text('note').notNull(),
+    createdByAdminId: uuid('created_by_admin_id')
+      .notNull()
+      .references(() => adminUsers.id),
+    voidedAt: timestamp('voided_at', { withTimezone: true }),
+    voidedByAdminId: uuid('voided_by_admin_id').references(() => adminUsers.id),
+    voidReason: text('void_reason'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('finance_expenses_spent_idx').on(t.spentOn), index('finance_expenses_raffle_idx').on(t.raffleId)],
 )
 
 export type RaffleRow = typeof raffles.$inferSelect

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { and, eq, gte, sql } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
-import type { AdminApproval, AdminOverview, AdminRaffle, AdminUserDetail } from '@raffwin/shared/admin-types'
+import type { AdminApproval, AdminFinance, AdminOverview, AdminRaffle, AdminUserDetail } from '@raffwin/shared/admin-types'
 import { verifyChain } from '../src/admin/audit'
 import { hashPassword, issueTicket } from '../src/admin/session'
 import { recordSecurityEvent } from '../src/lib/security-events'
@@ -189,8 +189,9 @@ describe('raffle management', () => {
     expect((await player.get(`/v1/raffles/${raffle.id}`)).body.entryPriceRaffs).toBe(60)
 
     const late = await put(m, `/admin/v1/raffles/${raffle.id}`, raffleInput({ entryPriceRaffs: 1 }))
-    expect(late.status).toBe(400)
-    expect(late.body.error.message).toMatch(/Only drafts can be edited/)
+    // A raffle manager may edit drafts only; open raffles are for super admins
+    expect(late.status).toBe(403)
+    expect(late.body.error.message).toMatch(/Only a super admin can change a raffle that is open/)
   })
 
   it('validates the raffle form', async () => {
@@ -232,10 +233,12 @@ describe('maker-checker', () => {
     const [still] = await db.select().from(raffles).where(eq(raffles.id, raffle.id))
     expect(still?.status).toBe('open')
 
-    // A super_admin cannot approve their own request
-    const selfAsk = await write(boss, `/admin/v1/users/${player.userId}/adjust`, { raffs: 5, reason: 'goodwill credit' })
-    const selfApprove = await write(boss, `/admin/v1/approvals/${selfAsk.body.id}/approve`)
+    // Nobody approves their own request (finance asks, then tries to approve it)
+    const selfAsk = await write(finance, `/admin/v1/users/${player.userId}/adjust`, { raffs: 5, reason: 'goodwill credit' })
+    expect(selfAsk.status).toBe(202)
+    const selfApprove = await write(finance, `/admin/v1/approvals/${selfAsk.body.id}/approve`)
     expect(selfApprove.status).toBe(403)
+    await write(boss, `/admin/v1/approvals/${selfAsk.body.id}/reject`, { note: 'test cleanup' })
 
     const ok = await write(finance, `/admin/v1/approvals/${approval.id}/approve`, { note: 'Confirmed with supplier' })
     expect(ok.status, JSON.stringify(ok.body)).toBe(200)
@@ -308,6 +311,151 @@ describe('user management', () => {
     expect(byName.map((u: { id: string }) => u.id)).toContain(player.userId)
     const byTg = (await get(v, `/admin/v1/users?q=${player.telegramId}`)).body
     expect(byTg[0].id).toBe(player.userId)
+  })
+})
+
+describe('super admins act without approval', () => {
+  it('cancels, adjusts and changes the rate at once, still recorded as done directly', async () => {
+    const boss = await makeAdmin('super_admin')
+    const player = await member(http)
+    await credit(db, player.userId, 500)
+    const raffle = await createRaffle(db, { entryPriceRaffs: 100 })
+    await player.post('/v1/entries', { raffleId: raffle.id, qty: 2, idempotencyKey: randomUUID() })
+
+    const cancel = await write(boss, `/admin/v1/raffles/${raffle.id}/cancel`, { reason: 'Prize unavailable' })
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200)
+    expect(cancel.body).toMatchObject({ status: 'approved', decidedBy: 'done directly (super admin)', result: { raffsRefunded: 200, direct: true } })
+    expect((await player.get('/v1/bootstrap')).body.balance).toBe(500)
+
+    const adjust = await write(boss, `/admin/v1/users/${player.userId}/adjust`, { raffs: 50, reason: 'Goodwill credit' })
+    expect(adjust.status).toBe(200)
+    expect((await player.get('/v1/bootstrap')).body.balance).toBe(550)
+
+    const rate = await write(boss, '/admin/v1/settings/rate-base', { starsPerRaff: 0.5, reason: 'Keep the base' })
+    expect(rate.status).toBe(200)
+
+    const history = (await get(boss, '/admin/v1/approvals?status=approved')).body as AdminApproval[]
+    expect(history.some((a) => a.id === cancel.body.id)).toBe(true)
+    const audit = await db.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where action like 'direct.%' and admin_id = ${boss.id}`)
+    expect(audit.rows[0]?.n).toBe(3)
+  })
+
+  it('still queues the same actions for other roles', async () => {
+    const fin = await makeAdmin('finance')
+    const player = await member(http)
+    const res = await write(fin, `/admin/v1/users/${player.userId}/adjust`, { raffs: 10, reason: 'needs a second admin' })
+    expect(res.status).toBe(202)
+    expect(res.body.status).toBe('pending')
+  })
+})
+
+describe('managing open raffles', () => {
+  it('lets a super admin change an open raffle, never below what is sold', async () => {
+    const boss = await makeAdmin('super_admin')
+    const manager = await makeAdmin('raffle_manager')
+    const created = await write(boss, '/admin/v1/raffles', raffleInput())
+    await write(boss, `/admin/v1/raffles/${created.body.id}/open`)
+    const player = await member(http)
+    await credit(db, player.userId, 1000)
+    await player.post('/v1/entries', { raffleId: created.body.id, qty: 5, idempotencyKey: randomUUID() })
+
+    const later = new Date(Date.now() + 9 * 86_400_000).toISOString()
+    const edit = await put(boss, `/admin/v1/raffles/${created.body.id}`, raffleInput({ entryPriceRaffs: 70, entriesTarget: 800, deadline: later, prizes: [
+      { position: 1, prizeItem: 'Samsung Galaxy A25', prizeType: 'physical', costNaira: 240_000 },
+      { position: 2, prizeItem: '10,000 Raffs credit', prizeType: 'raffs_credit', raffsValue: 10_000 },
+      { position: 3, prizeItem: 'Oraimo earbuds', prizeType: 'physical', costNaira: 25_000 },
+    ] }))
+    expect(edit.status, JSON.stringify(edit.body)).toBe(200)
+    expect(edit.body).toMatchObject({ status: 'open', entryPriceRaffs: 70, entriesTarget: 800, entriesCount: 5 })
+    expect(edit.body.prizes[0]).toMatchObject({ prizeItem: 'Samsung Galaxy A25', costNaira: 240_000 })
+
+    const below = await put(boss, `/admin/v1/raffles/${created.body.id}`, raffleInput({ entriesTarget: 4 }))
+    expect(below.status).toBe(400)
+    expect(below.body.error.message).toMatch(/5 entries are already sold/)
+    expect((await put(manager, `/admin/v1/raffles/${created.body.id}`, raffleInput())).status).toBe(403)
+  })
+
+  it('unpublishes an open raffle nobody has entered, then republishes it', async () => {
+    const boss = await makeAdmin('super_admin')
+    const created = await write(boss, '/admin/v1/raffles', raffleInput())
+    await write(boss, `/admin/v1/raffles/${created.body.id}/open`)
+    const player = await member(http)
+    expect((await player.get(`/v1/raffles/${created.body.id}`)).status).toBe(200)
+    const off = await write(boss, `/admin/v1/raffles/${created.body.id}/unpublish`, { reason: 'Wrong photo' })
+    expect(off.body.status).toBe('draft')
+    expect((await player.get(`/v1/raffles/${created.body.id}`)).status).toBe(404)
+    expect((await write(boss, `/admin/v1/raffles/${created.body.id}/open`)).body.status).toBe('open')
+  })
+
+  it('refuses to unpublish once entries are sold', async () => {
+    const boss = await makeAdmin('super_admin')
+    const raffle = await createRaffle(db)
+    const player = await member(http)
+    await credit(db, player.userId, 100)
+    await player.post('/v1/entries', { raffleId: raffle.id, qty: 1, idempotencyKey: randomUUID() })
+    const res = await write(boss, `/admin/v1/raffles/${raffle.id}/unpublish`, { reason: 'try anyway' })
+    expect(res.status).toBe(400)
+    expect(res.body.error.message).toMatch(/Cancel the raffle instead/)
+  })
+})
+
+describe('finance', () => {
+  it('reports raised, prize costs, referral pay, expenses and margin per raffle', async () => {
+    const boss = await makeAdmin('super_admin')
+    // Report rate: 0.5 Star per Raff x N20 per Star = N10 per Raff
+    await put(boss, '/admin/v1/settings/limits', { maxEntriesPerUserPerRaffle: null, dailySpendRaffs: null, nairaPerStar: 20 })
+    const created = await write(boss, '/admin/v1/raffles', raffleInput({ entryPriceRaffs: 100, prizes: [
+      { position: 1, prizeItem: 'Phone', prizeType: 'physical', costNaira: 150_000 },
+      { position: 2, prizeItem: '2,000 Raffs credit', prizeType: 'raffs_credit', raffsValue: 2000 },
+      { position: 3, prizeItem: 'Earbuds', prizeType: 'physical', costNaira: 20_000 },
+    ] }))
+    await write(boss, `/admin/v1/raffles/${created.body.id}/open`)
+    const referrer = await member(http)
+    const player = await member(http, { startParam: `ref_${referrer.referralCode}` })
+    await credit(db, player.userId, 10_000)
+    await player.post('/v1/entries', { raffleId: created.body.id, qty: 50, idempotencyKey: randomUUID() })
+
+    const exp = await write(boss, '/admin/v1/finance/expenses', { raffleId: created.body.id, category: 'delivery', amountNaira: 5_000, spentOn: new Date().toISOString(), note: 'Courier to Ojota' })
+    expect(exp.status, JSON.stringify(exp.body)).toBe(201)
+    const general = await write(boss, '/admin/v1/finance/expenses', { raffleId: null, category: 'operations', amountNaira: 12_000, spentOn: new Date().toISOString(), note: 'Server for October' })
+
+    const f = (await get(boss, '/admin/v1/finance')).body as AdminFinance
+    expect(f.nairaPerRaff).toBe(10)
+    const row = f.raffles.find((r) => r.id === created.body.id)
+    expect(row).toMatchObject({
+      raisedRaffs: 5000,
+      raisedNaira: 50_000,
+      prizeCostNaira: 190_000,
+      referralRaffs: 500,
+      referralNaira: 5_000,
+      expensesNaira: 5_000,
+      marginNaira: 50_000 - 190_000 - 5_000 - 5_000,
+    })
+    expect(row?.prizes.map((p) => p.costNaira)).toEqual([150_000, 20_000, 20_000])
+    expect(f.totals.generalExpensesNaira).toBeGreaterThanOrEqual(12_000)
+
+    // A voided expense stops counting
+    await write(boss, `/admin/v1/finance/expenses/${general.body.id}/void`, { reason: 'Entered twice' })
+    const after = (await get(boss, '/admin/v1/finance')).body as AdminFinance
+    expect(after.totals.generalExpensesNaira).toBe(f.totals.generalExpensesNaira - 12_000)
+    const listed = (await get(boss, '/admin/v1/finance/expenses')).body as { id: string; voidedAt: string | null }[]
+    expect(listed.find((e) => e.id === general.body.id)?.voidedAt).not.toBeNull()
+  })
+
+  it('is open to finance and super admins only', async () => {
+    const fin = await makeAdmin('finance')
+    const viewer = await makeAdmin('viewer')
+    expect((await get(fin, '/admin/v1/finance')).status).toBe(200)
+    expect((await get(viewer, '/admin/v1/finance')).status).toBe(403)
+  })
+
+  it('shows players and the total raised on the overview', async () => {
+    const v = await makeAdmin('viewer')
+    const o = (await get(v, '/admin/v1/overview')).body as AdminOverview
+    expect(o.users.total).toBeGreaterThan(0)
+    expect(o.users.activeLast7Days).toBeGreaterThan(0)
+    expect(o.raised.raffs).toBeGreaterThan(0)
+    expect(o.raised.naira).toBe(Math.round(o.raised.raffs * o.raised.nairaPerRaff))
   })
 })
 

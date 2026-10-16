@@ -8,6 +8,8 @@ import { useNavigate } from 'react-router-dom'
 import type {
   AdminApproval,
   AdminAuditRow,
+  AdminExpense,
+  AdminFinance,
   AdminOverview,
   AdminRaffle,
   AdminSecurityEvent,
@@ -46,10 +48,11 @@ function AskPanel() {
   )
 }
 
-type Tab = 'overview' | 'raffles' | 'approvals' | 'players' | 'settings' | 'security' | 'audit' | 'admins'
+type Tab = 'overview' | 'raffles' | 'finance' | 'approvals' | 'players' | 'settings' | 'security' | 'audit' | 'admins'
 const TABS: { id: Tab; label: string; perm?: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'raffles', label: 'Raffles' },
+  { id: 'finance', label: 'Finance', perm: 'finance.read' },
   { id: 'approvals', label: 'Approvals' },
   { id: 'players', label: 'Players' },
   { id: 'settings', label: 'Settings' },
@@ -162,10 +165,11 @@ export function AdminScreen() {
       </header>
       <main className="p-3 pb-16 text-[14px]">
         {tab === 'overview' && <OverviewTab />}
-        {tab === 'raffles' && <RafflesTab can={me.permissions} />}
+        {tab === 'raffles' && <RafflesTab can={me.permissions} superAdmin={me.role === 'super_admin'} />}
+        {tab === 'finance' && <FinanceTab can={me.permissions} />}
         {tab === 'approvals' && <ApprovalsTab can={me.permissions} />}
-        {tab === 'players' && <PlayersTab can={me.permissions} />}
-        {tab === 'settings' && <SettingsTab can={me.permissions} />}
+        {tab === 'players' && <PlayersTab can={me.permissions} superAdmin={me.role === 'super_admin'} />}
+        {tab === 'settings' && <SettingsTab can={me.permissions} superAdmin={me.role === 'super_admin'} />}
         {tab === 'security' && <SecurityTab />}
         {tab === 'audit' && <AuditTab />}
         {tab === 'admins' && <AdminsTab />}
@@ -176,13 +180,23 @@ export function AdminScreen() {
 
 /* Overview ------------------------------------------------------------------- */
 
+const naira = (n: number) => `₦${Math.round(n).toLocaleString('en-NG')}`
+
+function Big({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="border-2 border-black p-3">
+      <p className="text-[12px] font-semibold uppercase tracking-wide">{label}</p>
+      <p className="mt-1 text-[32px] font-extrabold leading-none">{value}</p>
+      {sub && <p className="mt-1 text-[12px]">{sub}</p>}
+    </div>
+  )
+}
+
 function OverviewTab() {
   const { data: o, error, reload } = useLoad<AdminOverview>('/overview', 10_000)
   if (error) return <Err message={error} />
   if (!o) return <p>Loading...</p>
   const rows: [string, string][] = [
-    ['Players (signed up / total)', `${fmt(o.users.signedUp)} / ${fmt(o.users.total)}`],
-    ['New today', fmt(o.users.signedUpToday)],
     ['Entries today', `${fmt(o.entries.today)} (${fmt(o.entries.raffsToday)} Raffs)`],
     ['Open raffles / drafts', `${o.raffles.open} / ${o.raffles.drafts}`],
     ['Raffs owed to players', fmt(o.raffsOutstanding)],
@@ -193,7 +207,11 @@ function OverviewTab() {
   ]
   return (
     <>
-      <table className="w-full border-collapse">
+      <div className="grid grid-cols-2 gap-2">
+        <Big label="Players" value={fmt(o.users.total)} sub={`${fmt(o.users.signedUpToday)} new today · ${fmt(o.users.activeLast7Days)} active in 7 days`} />
+        <Big label="Raised (all time)" value={naira(o.raised.naira)} sub={`${fmt(o.raised.raffs)} Raffs at ${naira(o.raised.nairaPerRaff)} per Raff`} />
+      </div>
+      <table className="mt-3 w-full border-collapse">
         <tbody>
           {rows.map(([k, v]) => (
             <tr key={k} className="border-b border-black/20">
@@ -223,80 +241,154 @@ const emptyRaffle = {
   deadline: '',
   description: '',
   p1: '',
+  p1cost: '',
   p2: '',
   p2raffs: '',
+  p2cost: '',
   p3: '',
   p3raffs: '',
+  p3cost: '',
+}
+type RaffleForm = typeof emptyRaffle
+
+/** datetime-local wants "YYYY-MM-DDTHH:mm" in local time */
+function toLocalInput(iso: string): string {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function RafflesTab({ can }: { can: string[] }) {
+function formFromRaffle(r: AdminRaffle): RaffleForm {
+  const p = (pos: number) => r.prizes.find((x) => x.position === pos)
+  return {
+    prizeName: r.prizeName,
+    model: r.model,
+    category: r.category,
+    kind: r.kind,
+    marketPriceNaira: String(r.marketPriceNaira),
+    entryPriceRaffs: String(r.entryPriceRaffs),
+    entriesTarget: String(r.entriesTarget),
+    deadline: toLocalInput(r.deadline),
+    description: r.description,
+    p1: p(1)?.prizeItem ?? '',
+    p1cost: String(p(1)?.costNaira ?? ''),
+    p2: p(2)?.prizeItem ?? '',
+    p2raffs: p(2)?.prizeType === 'raffs_credit' ? String(p(2)?.raffsValue ?? '') : '',
+    p2cost: p(2)?.prizeType === 'physical' ? String(p(2)?.costNaira ?? '') : '',
+    p3: p(3)?.prizeItem ?? '',
+    p3raffs: p(3)?.prizeType === 'raffs_credit' ? String(p(3)?.raffsValue ?? '') : '',
+    p3cost: p(3)?.prizeType === 'physical' ? String(p(3)?.costNaira ?? '') : '',
+  }
+}
+
+function bodyFromForm(f: RaffleForm, rules: string[]) {
+  const prize = (position: 1 | 2 | 3, item: string, raffs: string, cost: string) =>
+    raffs
+      ? { position, prizeItem: item, prizeType: 'raffs_credit', raffsValue: Number(raffs), costNaira: 0 }
+      : { position, prizeItem: item, prizeType: 'physical', raffsValue: 0, costNaira: Number(cost || 0) }
+  return {
+    prizeName: f.prizeName,
+    model: f.model,
+    category: f.category,
+    kind: f.kind,
+    marketPriceNaira: Number(f.marketPriceNaira),
+    entryPriceRaffs: Number(f.entryPriceRaffs),
+    entriesTarget: Number(f.entriesTarget),
+    deadline: new Date(f.deadline).toISOString(),
+    description: f.description,
+    rules,
+    prizes: [prize(1, f.p1, '', f.p1cost), prize(2, f.p2, f.p2raffs, f.p2cost), prize(3, f.p3, f.p3raffs, f.p3cost)],
+  }
+}
+
+function RafflesTab({ can, superAdmin }: { can: string[]; superAdmin: boolean }) {
   const { data, error, reload } = useLoad<AdminRaffle[]>('/raffles', 15_000)
   const [form, setForm] = useState(emptyRaffle)
-  const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<AdminRaffle | 'new' | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
   const action = useAction()
-  const set = (k: keyof typeof emptyRaffle) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }))
+  const set = (k: keyof RaffleForm) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }))
 
-  const create = () =>
-    action
-      .run(() =>
-        adminCall<AdminRaffle>('POST', '/raffles', {
-          prizeName: form.prizeName,
-          model: form.model,
-          category: form.category,
-          kind: form.kind,
-          marketPriceNaira: Number(form.marketPriceNaira),
-          entryPriceRaffs: Number(form.entryPriceRaffs),
-          entriesTarget: Number(form.entriesTarget),
-          deadline: new Date(form.deadline).toISOString(),
-          description: form.description,
-          rules: [],
-          prizes: [
-            { position: 1, prizeItem: form.p1, prizeType: 'physical' },
-            { position: 2, prizeItem: form.p2, prizeType: form.p2raffs ? 'raffs_credit' : 'physical', raffsValue: Number(form.p2raffs || 0) },
-            { position: 3, prizeItem: form.p3, prizeType: form.p3raffs ? 'raffs_credit' : 'physical', raffsValue: Number(form.p3raffs || 0) },
-          ],
-        }),
-      )
+  const startNew = () => {
+    setForm(emptyRaffle)
+    setEditing('new')
+    setMsg(null)
+  }
+  const startEdit = (r: AdminRaffle) => {
+    setForm(formFromRaffle(r))
+    setEditing(r)
+    setMsg(null)
+    window.scrollTo({ top: 0 })
+  }
+  const save = () => {
+    const isNew = editing === 'new'
+    const rules = isNew ? [] : (editing as AdminRaffle).rules
+    const body = bodyFromForm(form, rules)
+    void action
+      .run(() => (isNew ? adminCall<AdminRaffle>('POST', '/raffles', body) : adminCall<AdminRaffle>('PUT', `/raffles/${(editing as AdminRaffle).id}`, body)))
       .then((r) => {
         if (r) {
+          setMsg(isNew ? `Draft saved: ${r.prizeName}. Publish it when ready.` : `Saved: ${r.prizeName}.`)
+          setEditing(null)
           setForm(emptyRaffle)
-          setCreating(false)
           reload()
         }
       })
-
-  const open = (id: string) => action.run(() => adminCall('POST', `/raffles/${id}/open`)).then(reload)
-  const cancel = async (id: string) => {
-    const reason = await askText('Why cancel? Every entry is refunded once a second admin approves.')
-    if (reason) void action.run(() => adminCall('POST', `/raffles/${id}/cancel`, { reason })).then(reload)
   }
+  const publish = (id: string) => action.run(() => adminCall('POST', `/raffles/${id}/open`)).then(reload)
+  const unpublish = async (id: string) => {
+    const reason = await askText('Why unpublish? It goes back to draft, hidden from players.')
+    if (reason) void action.run(() => adminCall('POST', `/raffles/${id}/unpublish`, { reason })).then(reload)
+  }
+  const cancel = async (r: AdminRaffle) => {
+    const reason = await askText(
+      superAdmin
+        ? `Cancel "${r.prizeName}"? Every entry is refunded at once. Why?`
+        : 'Why cancel? Every entry is refunded once a second admin approves.',
+    )
+    if (!reason) return
+    const a = await action.run(() => adminCall<AdminApproval>('POST', `/raffles/${r.id}/cancel`, { reason }))
+    if (a) setMsg(a.status === 'approved' ? `Cancelled and refunded: ${a.summary}` : `Queued for approval: ${a.summary}`)
+    reload()
+  }
+
+  const fields: [keyof RaffleForm, string][] = [
+    ['prizeName', 'Prize name (the raffle title)'],
+    ['model', 'Model'],
+    ['category', 'Category'],
+    ['marketPriceNaira', 'Market price (Naira, shown to players)'],
+    ['entryPriceRaffs', 'Entry price (Raffs)'],
+    ['entriesTarget', 'Entries on sale'],
+    ['description', 'Description'],
+    ['p1', '1st prize'],
+    ['p1cost', '1st prize: what it costs you (Naira)'],
+    ['p2', '2nd prize'],
+    ['p2raffs', '2nd prize Raffs value (fill this for a Raffs prize)'],
+    ['p2cost', '2nd prize: cost in Naira (physical prize)'],
+    ['p3', '3rd prize'],
+    ['p3raffs', '3rd prize Raffs value (fill this for a Raffs prize)'],
+    ['p3cost', '3rd prize: cost in Naira (physical prize)'],
+  ]
+  const canEdit = (r: AdminRaffle) => can.includes('raffles.write') && (r.status === 'draft' || (r.status === 'open' && superAdmin))
 
   return (
     <>
       <Err message={error ?? action.error} />
-      {can.includes('raffles.write') && (
-        <button type="button" className={btn} onClick={() => setCreating((c) => !c)}>
-          {creating ? 'Close the form' : 'New raffle (draft)'}
+      {msg && <p className="my-2 border border-black p-2">{msg}</p>}
+      {can.includes('raffles.write') && editing === null && (
+        <button type="button" className={btn} onClick={startNew}>
+          New raffle (draft)
         </button>
       )}
-      {creating && (
-        <div className="my-3 grid gap-2 border border-black p-3">
-          {(
-            [
-              ['prizeName', 'Prize name'],
-              ['model', 'Model'],
-              ['category', 'Category'],
-              ['marketPriceNaira', 'Market price (Naira)'],
-              ['entryPriceRaffs', 'Entry price (Raffs, fixed)'],
-              ['entriesTarget', 'Entries on sale'],
-              ['description', 'Description'],
-              ['p1', '1st prize'],
-              ['p2', '2nd prize'],
-              ['p2raffs', '2nd prize Raffs value (empty = physical)'],
-              ['p3', '3rd prize'],
-              ['p3raffs', '3rd prize Raffs value (empty = physical)'],
-            ] as [keyof typeof emptyRaffle, string][]
-          ).map(([k, label]) => (
+      {editing !== null && (
+        <div className="my-3 grid gap-2 border-2 border-black p-3">
+          <p className="font-bold">{editing === 'new' ? 'New raffle' : `Edit: ${editing.prizeName} [${editing.status}]`}</p>
+          {editing !== 'new' && editing.status === 'open' && (
+            <p className="text-[12px]">
+              Open raffle: {editing.entriesCount} entries already sold, so entries on sale cannot go below that. Changing the entry price affects new entries only.
+            </p>
+          )}
+          {fields.map(([k, label]) => (
             <label key={k} className="grid gap-0.5 text-[12px]">
               {label}
               <input className={input} value={form[k]} onChange={set(k)} />
@@ -314,9 +406,14 @@ function RafflesTab({ can }: { can: string[] }) {
             Deadline (draw time)
             <input className={input} type="datetime-local" value={form.deadline} onChange={set('deadline')} />
           </label>
-          <button type="button" className={btnSolid} disabled={action.busy} onClick={() => void create()}>
-            Save draft
-          </button>
+          <div className="flex gap-2">
+            <button type="button" className={btnSolid} disabled={action.busy} onClick={save}>
+              {editing === 'new' ? 'Save draft' : 'Save changes'}
+            </button>
+            <button type="button" className={btn} onClick={() => setEditing(null)}>
+              Close
+            </button>
+          </div>
         </div>
       )}
       <H>All raffles</H>
@@ -326,24 +423,223 @@ function RafflesTab({ can }: { can: string[] }) {
         data.map((r) => (
           <div key={r.id} className="mb-2 border border-black/30 p-2">
             <p className="font-bold">
-              {r.prizeName} <span className="font-normal">[{r.status}]</span>
+              {r.prizeName} <span className="font-normal">[{r.status === 'draft' ? 'draft (not published)' : r.status}]</span>
             </p>
             <p className="text-[12px]">
               {fmt(r.entryPriceRaffs)} Raffs/entry · {fmt(r.entriesCount)}/{fmt(r.entriesTarget)} sold · {fmt(r.raffsCollected)} Raffs in · draw {when(r.deadline)}
             </p>
-            <p className="text-[12px]">Prizes: {r.prizes.map((p) => `${p.position}. ${p.prizeItem}${p.winnerUsername ? ` (@${p.winnerUsername})` : ''}`).join('  ')}</p>
-            <div className="mt-1 flex gap-2">
+            <p className="text-[12px]">
+              Prizes:{' '}
+              {r.prizes
+                .map((p) => `${p.position}. ${p.prizeItem}${p.prizeType === 'physical' && p.costNaira ? ` (cost ${naira(p.costNaira)})` : ''}${p.winnerUsername ? ` @${p.winnerUsername}` : ''}`)
+                .join('  ')}
+            </p>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {canEdit(r) && (
+                <button type="button" className={btn} onClick={() => startEdit(r)}>
+                  Edit
+                </button>
+              )}
               {r.status === 'draft' && can.includes('raffles.write') && (
-                <button type="button" className={btn} onClick={() => void open(r.id)}>
-                  Open for entries
+                <button type="button" className={btnSolid} onClick={() => void publish(r.id)}>
+                  Publish
+                </button>
+              )}
+              {r.status === 'open' && r.entriesCount === 0 && can.includes('raffles.write') && (
+                <button type="button" className={btn} onClick={() => void unpublish(r.id)}>
+                  Unpublish
                 </button>
               )}
               {(r.status === 'open' || r.status === 'draft') && can.includes('raffles.cancel.request') && (
-                <button type="button" className={btn} onClick={() => void cancel(r.id)}>
-                  Ask to cancel
+                <button type="button" className={btn} onClick={() => void cancel(r)}>
+                  {superAdmin ? 'Cancel and refund' : 'Ask to cancel'}
                 </button>
               )}
             </div>
+          </div>
+        ))
+      )}
+    </>
+  )
+}
+
+/* Finance (super admin and finance) ------------------------------------------ */
+
+type PeriodKey = 'all' | 'month' | '30d'
+
+function periodQuery(p: PeriodKey): string {
+  const now = new Date()
+  if (p === 'month') return `?from=${new Date(now.getFullYear(), now.getMonth(), 1).toISOString()}`
+  if (p === '30d') return `?from=${new Date(now.getTime() - 30 * 86_400_000).toISOString()}`
+  return ''
+}
+
+function FinanceTab({ can }: { can: string[] }) {
+  const [period, setPeriod] = useState<PeriodKey>('all')
+  const q = periodQuery(period)
+  const { data: f, error, reload } = useLoad<AdminFinance>(`/finance${q}`, 30_000)
+  const { data: expenses, reload: reloadExpenses } = useLoad<AdminExpense[]>(`/finance/expenses${q}`)
+  const { data: raffleList } = useLoad<AdminRaffle[]>('/raffles')
+  const action = useAction()
+  const today = new Date().toISOString().slice(0, 10)
+  const [exp, setExp] = useState({ raffleId: '', category: 'delivery', amountNaira: '', spentOn: today, note: '' })
+
+  const addExpense = () =>
+    void action
+      .run(() =>
+        adminCall<AdminExpense>('POST', '/finance/expenses', {
+          raffleId: exp.raffleId || null,
+          category: exp.category,
+          amountNaira: Number(exp.amountNaira),
+          spentOn: new Date(`${exp.spentOn}T12:00:00`).toISOString(),
+          note: exp.note,
+        }),
+      )
+      .then((r) => {
+        if (r) {
+          setExp({ raffleId: '', category: 'delivery', amountNaira: '', spentOn: today, note: '' })
+          reload()
+          reloadExpenses()
+        }
+      })
+  const voidOne = async (id: string) => {
+    const reason = await askText('Why void this expense? It stays on record but stops counting.')
+    if (reason) void action.run(() => adminCall('POST', `/finance/expenses/${id}/void`, { reason })).then(() => (reload(), reloadExpenses()))
+  }
+
+  if (error) return <Err message={error} />
+  if (!f) return <p>Loading...</p>
+  const t = f.totals
+  return (
+    <>
+      <div className="flex gap-1">
+        {(
+          [
+            ['all', 'All time'],
+            ['month', 'This month'],
+            ['30d', 'Last 30 days'],
+          ] as [PeriodKey, string][]
+        ).map(([k, label]) => (
+          <button key={k} type="button" className={period === k ? btnSolid : btn} onClick={() => setPeriod(k)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <Err message={action.error} />
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Big label="Raised" value={naira(t.raisedNaira)} sub={`${fmt(t.raisedRaffs)} Raffs spent on entries`} />
+        <Big label="Profit" value={naira(t.profitNaira)} sub="raised - prizes - referral pay - expenses" />
+      </div>
+
+      <H>Summary</H>
+      <table className="w-full border-collapse text-[13px]">
+        <tbody>
+          {(
+            [
+              ['Raised from entries', naira(t.raisedNaira)],
+              ['Cost of prizes (1st, 2nd, 3rd)', `- ${naira(t.prizeCostNaira)}`],
+              ['Referral payouts (10%)', `- ${naira(t.referralNaira)}`],
+              ['Expenses linked to raffles', `- ${naira(t.raffleExpensesNaira)}`],
+              ['General expenses', `- ${naira(t.generalExpensesNaira)}`],
+              ['Profit', naira(t.profitNaira)],
+              ['', ''],
+              ['Money received (Telegram Stars)', `${fmt(f.cash.starsReceived)} Stars = ${naira(f.cash.starsNaira)}`],
+              ['Raffs sold for Stars', fmt(f.cash.raffsSold)],
+              ['Free Raffs given: bonuses / admin credits', `${fmt(f.freeRaffs.bonus)} / ${fmt(f.freeRaffs.adjustments)}`],
+              ['Free Raffs given: Raffs prizes / referral pay', `${fmt(f.freeRaffs.prizes)} / ${fmt(f.freeRaffs.referrals)}`],
+              ['Raffs players hold now (owed in entries)', fmt(f.outstandingRaffs)],
+            ] as [string, string][]
+          ).map(([k, v], i) => (
+            <tr key={i} className={k === 'Profit' ? 'border-y-2 border-black font-bold' : 'border-b border-black/10'}>
+              <td className="py-1 pr-2">{k}</td>
+              <td className="py-1 text-right">{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-1 text-[11px]">
+        Raffs are valued at {naira(f.nairaPerRaff)} each (base Stars per Raff x {naira(f.nairaPerStar)} per Star, from Settings). Raffs prizes count at
+        that value; physical prizes at the cost entered on the raffle; prize costs count once a raffle is published. Stars purchases are not
+        switched on yet, so money received is 0 until they are.
+      </p>
+
+      <H>Per raffle</H>
+      {f.raffles.map((r) => (
+        <div key={r.id} className="mb-2 border border-black/30 p-2 text-[12px]">
+          <p className="text-[13px] font-bold">
+            {r.prizeName} [{r.status}] · margin {naira(r.marginNaira)}
+          </p>
+          <p>
+            {fmt(r.entriesSold)}/{fmt(r.entriesTarget)} entries at {fmt(r.entryPriceRaffs)} Raffs · raised {fmt(r.raisedRaffs)} Raffs = {naira(r.raisedNaira)}
+            {r.refundedRaffs ? ` (after ${fmt(r.refundedRaffs)} refunded)` : ''}
+          </p>
+          {r.prizes.map((p) => (
+            <p key={p.position}>
+              {['1st', '2nd', '3rd'][p.position - 1]}: {p.prizeItem} · {p.prizeType === 'raffs_credit' ? `${fmt(p.raffsValue)} Raffs = ` : 'cost '}
+              {naira(p.costNaira)}
+            </p>
+          ))}
+          <p>
+            Prizes {naira(r.prizeCostNaira)} · referral pay {naira(r.referralNaira)} ({fmt(r.referralRaffs)} Raffs) · expenses {naira(r.expensesNaira)}
+          </p>
+        </div>
+      ))}
+
+      <H>Expenses</H>
+      {can.includes('finance.write') && (
+        <div className="mb-3 grid gap-2 border border-black p-3">
+          <p className="font-bold">Record an expense</p>
+          <label className="grid gap-0.5 text-[12px]">
+            For
+            <select className={input} value={exp.raffleId} onChange={(e) => setExp({ ...exp, raffleId: e.target.value })}>
+              <option value="">General (not one raffle)</option>
+              {(raffleList ?? []).map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.prizeName} [{r.status}]
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-0.5 text-[12px]">
+            Category
+            <select className={input} value={exp.category} onChange={(e) => setExp({ ...exp, category: e.target.value })}>
+              {['prize_purchase', 'delivery', 'marketing', 'fees', 'operations', 'other'].map((c) => (
+                <option key={c} value={c}>
+                  {c.replace('_', ' ')}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-0.5 text-[12px]">
+            Amount (Naira)
+            <input className={input} inputMode="numeric" value={exp.amountNaira} onChange={(e) => setExp({ ...exp, amountNaira: e.target.value.replace(/[^0-9]/g, '') })} />
+          </label>
+          <label className="grid gap-0.5 text-[12px]">
+            Date
+            <input className={input} type="date" value={exp.spentOn} onChange={(e) => setExp({ ...exp, spentOn: e.target.value })} />
+          </label>
+          <label className="grid gap-0.5 text-[12px]">
+            What it was for
+            <input className={input} value={exp.note} onChange={(e) => setExp({ ...exp, note: e.target.value })} />
+          </label>
+          <button type="button" className={btnSolid} disabled={action.busy || !exp.amountNaira || exp.note.trim().length < 3} onClick={addExpense}>
+            Add expense
+          </button>
+        </div>
+      )}
+      {(expenses ?? []).length === 0 ? (
+        <p>No expenses recorded in this period.</p>
+      ) : (
+        (expenses ?? []).map((e) => (
+          <div key={e.id} className={`border-b border-black/10 py-1 text-[12px] ${e.voidedAt ? 'line-through opacity-60' : ''}`}>
+            {new Date(e.spentOn).toLocaleDateString('en-NG')} · {naira(e.amountNaira)} · {e.category.replace('_', ' ')} · {e.raffleName ?? 'general'} · {e.note} · by {e.createdBy}
+            {e.voidedAt ? ` · voided: ${e.voidReason}` : ''}
+            {!e.voidedAt && can.includes('finance.write') && (
+              <button type="button" className={`${btn} ml-2 py-0.5`} onClick={() => void voidOne(e.id)}>
+                Void
+              </button>
+            )}
           </div>
         ))
       )}
@@ -407,7 +703,7 @@ function ApprovalsTab({ can }: { can: string[] }) {
 
 /* Players -------------------------------------------------------------------- */
 
-function PlayersTab({ can }: { can: string[] }) {
+function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boolean }) {
   const [q, setQ] = useState('')
   const [query, setQuery] = useState('')
   const { data, error } = useLoad<AdminUserSummary[]>(`/users?q=${encodeURIComponent(query)}`)
@@ -422,7 +718,7 @@ function PlayersTab({ can }: { can: string[] }) {
       </div>
       <Err message={error} />
       {selected ? (
-        <PlayerDetail id={selected} can={can} onBack={() => setSelected(null)} />
+        <PlayerDetail id={selected} can={can} superAdmin={superAdmin} onBack={() => setSelected(null)} />
       ) : (
         (data ?? []).map((u) => (
           <button key={u.id} type="button" onClick={() => setSelected(u.id)} className="mt-2 block w-full border border-black/30 p-2 text-left">
@@ -435,7 +731,7 @@ function PlayersTab({ can }: { can: string[] }) {
   )
 }
 
-function PlayerDetail({ id, can, onBack }: { id: string; can: string[]; onBack: () => void }) {
+function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string[]; superAdmin: boolean; onBack: () => void }) {
   const { data: d, error, reload } = useLoad<AdminUserDetail>(`/users/${id}`)
   const action = useAction()
   const [done, setDone] = useState<string | null>(null)
@@ -457,9 +753,13 @@ function PlayerDetail({ id, can, onBack }: { id: string; can: string[]; onBack: 
   const adjust = async () => {
     const raffs = Number(await askText('Raffs to credit (negative to debit)') ?? '')
     if (!Number.isInteger(raffs) || raffs === 0) return
-    const reason = await askText('Why? A second admin approves before it happens.')
+    const reason = await askText(superAdmin ? 'Why? It happens at once and is recorded.' : 'Why? A second admin approves before it happens.')
     if (reason)
-      void action.run(() => adminCall<AdminApproval>('POST', `/users/${id}/adjust`, { raffs, reason })).then((a) => a && setDone(`Queued for approval: ${a.summary}`))
+      void action.run(() => adminCall<AdminApproval>('POST', `/users/${id}/adjust`, { raffs, reason })).then((a) => {
+        if (!a) return
+        setDone(a.status === 'approved' ? `Done: ${a.summary}` : `Queued for approval: ${a.summary}`)
+        reload()
+      })
   }
   return (
     <div className="mt-3">
@@ -500,7 +800,7 @@ function PlayerDetail({ id, can, onBack }: { id: string; can: string[]; onBack: 
             )}
             {can.includes('users.adjust.request') && (
               <button type="button" className={btn} onClick={() => void adjust()}>
-                Ask to adjust balance
+                {superAdmin ? 'Adjust balance' : 'Ask to adjust balance'}
               </button>
             )}
           </div>
@@ -525,7 +825,7 @@ function PlayerDetail({ id, can, onBack }: { id: string; can: string[]; onBack: 
 
 /* Settings ------------------------------------------------------------------- */
 
-function SettingsTab({ can }: { can: string[] }) {
+function SettingsTab({ can, superAdmin }: { can: string[]; superAdmin: boolean }) {
   const { data: s, error, reload } = useLoad<AdminSettings>('/settings')
   const action = useAction()
   const [base, setBase] = useState('')
@@ -550,14 +850,14 @@ function SettingsTab({ can }: { can: string[] }) {
             type="button"
             className={btn}
             onClick={async () => {
-              const reason = await askText('Why change the base? A second admin approves it.')
+              const reason = await askText(superAdmin ? 'Why change the base? It applies from the next hour.' : 'Why change the base? A second admin approves it.')
               if (reason)
                 void action
                   .run(() => adminCall<AdminApproval>('POST', '/settings/rate-base', { starsPerRaff: Number(base), reason }))
-                  .then((a) => a && setMsg(`Queued for approval: ${a.summary}`))
+                  .then((a) => a && setMsg(a.status === 'approved' ? `Done: ${a.summary} (from the next hour)` : `Queued for approval: ${a.summary}`))
             }}
           >
-            Ask to change
+            {superAdmin ? 'Change base' : 'Ask to change'}
           </button>
         </div>
       )}

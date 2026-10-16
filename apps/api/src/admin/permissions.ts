@@ -24,6 +24,9 @@ export const PERMISSIONS = [
   'audit.read',
   /** Add, disable and reset admins: super_admin only */
   'admins.manage',
+  /** Finance report and expenses: super_admin and finance */
+  'finance.read',
+  'finance.write',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -42,7 +45,7 @@ const ROLE_PERMISSIONS: Record<AdminRole, ReadonlySet<Permission>> = {
   viewer: new Set(READ),
   support: new Set([...READ, 'users.suspend']),
   raffle_manager: new Set([...READ, 'raffles.write', 'raffles.cancel.request']),
-  finance: new Set([...READ, 'settings.rate.request', 'users.adjust.request', 'approvals.decide']),
+  finance: new Set([...READ, 'settings.rate.request', 'users.adjust.request', 'approvals.decide', 'finance.read', 'finance.write']),
   super_admin: new Set(PERMISSIONS),
 }
 
