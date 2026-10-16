@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
+import { useEffect } from 'react'
 import { useLocation, useOutlet } from 'react-router-dom'
 import { TabBar } from './TabBar'
 import { cn } from '@/components/ui/cn'
@@ -12,6 +13,11 @@ export function AppShell() {
   const outlet = useOutlet()
   const root = `/${pathname.split('/')[1] ?? ''}`
   const showTabs = TAB_ROOTS.includes(root)
+
+  // Hash navigation keeps the scroll position; every screen should start at the top.
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior })
+  }, [pathname])
 
   return (
     <div className="relative mx-auto min-h-dvh w-full max-w-[520px] overflow-x-clip md:border-x md:border-white/5">
