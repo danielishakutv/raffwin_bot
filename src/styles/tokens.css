@@ -1,0 +1,87 @@
+/* ---------------------------------------------------------------------------
+   Raffle Win design tokens
+   One place for colour, type, radius, shadow and motion. Tailwind v4 reads
+   everything inside @theme and generates utilities from it (bg-grape,
+   text-sun, font-display, rounded-card, shadow-glow ...).
+   --------------------------------------------------------------------------- */
+@import 'tailwindcss';
+
+@theme {
+  /* Brand palette: arcade meets fintech */
+  --color-ink: #140c33; /* page background (deep violet-black) */
+  --color-ink-2: #1d1348; /* raised surface */
+  --color-ink-3: #281b5e; /* higher surface / input */
+  --color-cloud: #f7f4ff; /* primary text on dark */
+  --color-mist: #b9b0d9; /* secondary text on dark */
+  --color-haze: #7f74aa; /* muted text / placeholders */
+
+  --color-grape: #6b2cf5; /* purple */
+  --color-grape-2: #8a5cff;
+  --color-magenta: #f2358d;
+  --color-magenta-2: #ff6ab0;
+  --color-electric: #2f6bff;
+  --color-electric-2: #5d8cff;
+  --color-sun: #ffd43b; /* Raffs coin yellow */
+  --color-sun-2: #ffe580;
+  --color-mint: #35f0b4;
+  --color-mint-2: #8cf7d4;
+  --color-coral: #ff5c5c; /* errors */
+
+  /* Type */
+  --font-display: 'Bricolage Grotesque', 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Manrope', 'Segoe UI', system-ui, -apple-system, sans-serif;
+
+  /* Radii */
+  --radius-card: 24px;
+  --radius-field: 14px;
+  --radius-pill: 999px;
+
+  /* Shadows (layered depth + brand glows) */
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 12px 30px -12px rgba(0, 0, 0, 0.55);
+  --shadow-float: 0 24px 60px -20px rgba(20, 12, 51, 0.9), 0 8px 18px -8px rgba(0, 0, 0, 0.4);
+  --shadow-glow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 10px 30px -6px rgba(242, 53, 141, 0.55),
+    0 0 40px -10px rgba(107, 44, 245, 0.7);
+  --shadow-glow-sun: 0 10px 30px -8px rgba(255, 212, 59, 0.55);
+  --shadow-glow-mint: 0 10px 30px -8px rgba(53, 240, 180, 0.5);
+
+  /* Motion */
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+
+  --animate-float: float 9s ease-in-out infinite;
+  --animate-float-slow: float 14s ease-in-out infinite;
+  --animate-pulse-glow: pulseGlow 1.6s ease-in-out infinite;
+  --animate-shimmer: shimmer 2.2s linear infinite;
+  --animate-spin-slow: spin 6s linear infinite;
+
+  @keyframes float {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+      transform: translate3d(14px, -22px, 0) scale(1.06);
+    }
+  }
+  @keyframes pulseGlow {
+    0%,
+    100% {
+      box-shadow:
+        0 0 0 0 rgba(242, 53, 141, 0.55),
+        0 10px 30px -6px rgba(242, 53, 141, 0.55);
+    }
+    50% {
+      box-shadow:
+        0 0 0 10px rgba(242, 53, 141, 0),
+        0 14px 40px -6px rgba(242, 53, 141, 0.8);
+    }
+  }
+  @keyframes shimmer {
+    0% {
+      transform: translateX(-120%);
+    }
+    100% {
+      transform: translateX(220%);
+    }
+  }
+}

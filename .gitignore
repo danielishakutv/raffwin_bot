@@ -1,0 +1,31 @@
+# dependencies
+node_modules
+bot/node_modules
+
+# build output
+dist
+dist-ssr
+bot/dist
+*.local
+
+# env (committed: .env.example, .env.development, .env.staging, .env.production - none hold secrets)
+.env
+.env.local
+.env.*.local
+bot/.env
+bot/.env.local
+
+# editor / os
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+
+# logs
+logs
+*.log
+npm-debug.log*
+
+# vercel
+.vercel

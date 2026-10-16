@@ -1,0 +1,170 @@
+@import './tokens.css';
+
+/* ---------------------------------------------------------------------------
+   Base
+   --------------------------------------------------------------------------- */
+@layer base {
+  :root {
+    color-scheme: dark;
+    /* Telegram safe areas (set by the Telegram script on Bot API 8+; 0 elsewhere) */
+    --safe-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
+    --safe-bottom: max(var(--tg-safe-area-inset-bottom, 0px), env(safe-area-inset-bottom, 0px));
+    --tabbar-height: 72px;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-ink);
+    color: var(--color-cloud);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-variation-settings: 'opsz' 96;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    font-weight: 700;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-haze);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-sun);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  ::selection {
+    background: var(--color-magenta);
+    color: white;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Brand utilities (gradients, numerals, surfaces)
+   --------------------------------------------------------------------------- */
+@utility bg-brand {
+  background-image: linear-gradient(135deg, var(--color-grape) 0%, var(--color-magenta) 100%);
+}
+@utility bg-sky {
+  background-image: linear-gradient(135deg, var(--color-electric) 0%, var(--color-grape) 100%);
+}
+@utility bg-sunrise {
+  background-image: linear-gradient(135deg, var(--color-magenta) 0%, var(--color-sun) 100%);
+}
+@utility bg-lagoon {
+  background-image: linear-gradient(135deg, var(--color-mint) 0%, var(--color-electric) 100%);
+}
+@utility bg-sunny {
+  background-image: linear-gradient(135deg, var(--color-sun) 0%, #ff9f43 100%);
+}
+@utility text-brand {
+  background-image: linear-gradient(135deg, var(--color-grape-2) 0%, var(--color-magenta-2) 60%, var(--color-sun) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+@utility nums {
+  font-family: var(--font-display);
+  font-variation-settings: 'opsz' 96;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+@utility surface {
+  background: color-mix(in oklab, var(--color-ink-2) 85%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: var(--shadow-card);
+}
+@utility surface-2 {
+  background: color-mix(in oklab, var(--color-ink-3) 80%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+@utility glass {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(16px);
+}
+@utility safe-top {
+  padding-top: var(--safe-top);
+}
+@utility safe-bottom {
+  padding-bottom: var(--safe-bottom);
+}
+@utility pb-tabbar {
+  padding-bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 16px);
+}
+@utility tap {
+  min-height: 44px;
+  min-width: 44px;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+@utility ticket {
+  --notch: 14px;
+  --notch-y: 68%;
+  -webkit-mask-image: radial-gradient(circle at 0 var(--notch-y), transparent var(--notch), black calc(var(--notch) + 1px)),
+    radial-gradient(circle at 100% var(--notch-y), transparent var(--notch), black calc(var(--notch) + 1px));
+  -webkit-mask-composite: source-in;
+  mask-image: radial-gradient(circle at 0 var(--notch-y), transparent var(--notch), black calc(var(--notch) + 1px)),
+    radial-gradient(circle at 100% var(--notch-y), transparent var(--notch), black calc(var(--notch) + 1px));
+  mask-composite: intersect;
+}
+@utility perforation {
+  background-image: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.35) 0 8px, transparent 8px 16px);
+  height: 2px;
+}
