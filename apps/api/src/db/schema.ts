@@ -190,6 +190,17 @@ export const deliveryPoints = pgTable('delivery_points', {
   updatedAt: updatedAt(),
 })
 
+/**
+ * A referral code seen by the bot before the person ever opened the app
+ * (`/start ref_<code>` from a https://t.me/<bot>?start=ref_<code> link). Used
+ * once, when that Telegram account's app account is created. First invite wins.
+ */
+export const referralHints = pgTable('referral_hints', {
+  telegramId: bigint('telegram_id', { mode: 'number' }).primaryKey(),
+  code: text('code').notNull(),
+  createdAt: createdAt(),
+})
+
 export type UserRow = typeof users.$inferSelect
 export type SessionRow = typeof sessions.$inferSelect
 export type AddressRow = typeof addresses.$inferSelect

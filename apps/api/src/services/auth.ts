@@ -8,7 +8,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm'
 import { parseStartParam, USERNAME_RE } from '@raffwin/shared'
 import type { AppContext, RequestMeta } from '../context'
 import { uniqueViolation } from '../db/client'
-import { initDataUses, sessions, users, type UserRow } from '../db/schema'
+import { initDataUses, referralHints, sessions, users, type UserRow } from '../db/schema'
 import { newReferralCode, newRefreshToken, sha256Hex } from '../lib/crypto'
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
@@ -152,7 +152,9 @@ async function upsertTelegramUser(
   const [existing] = await ctx.db.select().from(users).where(eq(users.telegramId, tg.id))
   if (existing) return refreshExisting(ctx, existing, tg, telegramFields)
 
-  const referrerId = referralCode ? await referrerFor(ctx, referralCode, meta) : null
+  // The code on the opening link wins; otherwise one the bot saw in /start ref_<code> before this first open
+  const code0 = referralCode ?? (await referralHint(ctx, tg.id))
+  const referrerId = code0 ? await referrerFor(ctx, code0, meta) : null
   let username = usernameFromTelegram(tg) ?? generatedUsername()
   let code = newReferralCode()
   for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -212,6 +214,11 @@ async function refreshExisting(
     }
   }
   throw new Error(`could not update account ${user.id}`)
+}
+
+async function referralHint(ctx: AppContext, telegramId: number): Promise<string | null> {
+  const [hint] = await ctx.db.select({ code: referralHints.code }).from(referralHints).where(eq(referralHints.telegramId, telegramId))
+  return hint?.code ?? null
 }
 
 /** A referral code counts only if it belongs to an active account; otherwise it is recorded and ignored. */

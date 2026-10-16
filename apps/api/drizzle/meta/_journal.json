@@ -43,6 +43,13 @@
       "when": 1792162750242,
       "tag": "0005_m2d_admin_bot_login",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792182114315,
+      "tag": "0006_m2e_referral_hints",
+      "breakpoints": true
     }
   ]
 }

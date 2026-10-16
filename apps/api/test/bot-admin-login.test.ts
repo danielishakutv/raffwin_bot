@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest'
 import { hashPassword } from '../src/admin/session'
 import { FIRST_SIGNIN_CLAIM } from '../src/bot/admin-login'
 import { createBot } from '../src/bot/bot'
-import { adminUsers, securityEvents } from '../src/db/schema'
+import { adminUsers, referralHints, securityEvents, users } from '../src/db/schema'
+import { member } from './fixtures'
 import { BOT_TOKEN, initData, telegramId, testApp } from './helpers'
 
 const MASTER = 'correct-master-password-2026'
@@ -238,4 +239,52 @@ describe('bot admin sign-in', () => {
     expect(h.deleted().length).toBe(before) // not treated as a secret: there is no sign-in in progress
   })
 
+})
+
+describe('invites through the bot (/start ref_<code>)', () => {
+  async function firstOpen(id: number) {
+    const res = await http.post('/v1/auth/telegram').send({ initData: initData({ id, username: `inv_${id}` }) })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    const [row] = await db.select().from(users).where(eq(users.telegramId, id))
+    return row
+  }
+
+  it('binds the first app open to the referrer whose link was used', async () => {
+    const referrer = await member(http)
+    const friend = telegramId()
+    const h = harness()
+    await h.send({ id: friend, username: `inv_${friend}` }, `/start ref_${referrer.referralCode}`)
+    expect(h.replies().at(-1)).toMatch(/Welcome to Raffle Win/)
+    const row = await firstOpen(friend)
+    expect(row?.referredByUserId).toBe(referrer.userId)
+  })
+
+  it('keeps the first invite when a second link is used before opening the app', async () => {
+    const first = await member(http)
+    const second = await member(http)
+    const friend = telegramId()
+    const h = harness()
+    await h.send({ id: friend }, `/start ref_${first.referralCode}`)
+    await h.send({ id: friend }, `/start ref_${second.referralCode}`)
+    expect((await firstOpen(friend))?.referredByUserId).toBe(first.userId)
+  })
+
+  it('never re-binds someone who already has an account', async () => {
+    const referrer = await member(http)
+    const existing = await member(http)
+    const h = harness()
+    await h.send({ id: existing.telegramId }, `/start ref_${referrer.referralCode}`)
+    await http.post('/v1/auth/telegram').send({ initData: initData({ id: existing.telegramId }) })
+    const [row] = await db.select().from(users).where(eq(users.telegramId, existing.telegramId))
+    expect(row?.referredByUserId).toBeNull()
+    const [hint] = await db.select().from(referralHints).where(eq(referralHints.telegramId, existing.telegramId))
+    expect(hint).toBeUndefined()
+  })
+
+  it('ignores a malformed or unknown code', async () => {
+    const friend = telegramId()
+    const h = harness()
+    await h.send({ id: friend }, '/start ref_ZZZZZZZZ')
+    expect((await firstOpen(friend))?.referredByUserId).toBeNull()
+  })
 })

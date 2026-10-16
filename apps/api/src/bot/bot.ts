@@ -8,7 +8,10 @@
 import { Bot, InlineKeyboard, type Transformer } from 'grammy'
 import type { UserFromGetMe } from 'grammy/types'
 import type { Logger } from 'pino'
+import { eq } from 'drizzle-orm'
+import { parseStartParam } from '@raffwin/shared'
 import type { AppContext } from '../context'
+import { referralHints, users } from '../db/schema'
 import { installAdminLogin } from './admin-login'
 
 export interface BotOptions {
@@ -22,6 +25,24 @@ export interface BotOptions {
   testing?: { botInfo: UserFromGetMe; transformer: Transformer }
 }
 
+/**
+ * `/start ref_<code>` (from a https://t.me/<bot>?start=ref_<code> invite) for
+ * someone with no account yet: keep the code so their first open of the app is
+ * bound to that referrer. First invite wins; an existing account is never re-bound.
+ */
+async function rememberInvite(app: AppContext, telegramId: number, payload: string): Promise<void> {
+  const start = parseStartParam(payload.trim())
+  if (start?.kind !== 'referral') return
+  try {
+    const [existing] = await app.db.select({ id: users.id }).from(users).where(eq(users.telegramId, telegramId))
+    if (existing) return
+    await app.db.insert(referralHints).values({ telegramId, code: start.code }).onConflictDoNothing({ target: referralHints.telegramId })
+  } catch (error) {
+    // The welcome still goes out; the referral is the only thing lost, and the log says so
+    app.log.error({ err: error, telegramId }, 'could not remember a referral invite')
+  }
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
@@ -33,6 +54,7 @@ export function createBot(opts: BotOptions): Bot {
   const envNote = opts.envLabel === 'production' ? '' : `\n\n<i>Test environment: no real money.</i>`
 
   bot.command('start', async (ctx) => {
+    if (opts.app && ctx.from) await rememberInvite(opts.app, ctx.from.id, ctx.match)
     const name = ctx.from?.first_name ? escapeHtml(ctx.from.first_name) : 'there'
     await ctx.reply(
       [

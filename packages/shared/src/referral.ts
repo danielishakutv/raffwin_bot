@@ -41,6 +41,12 @@ export function parseStartParam(raw: string | null | undefined): StartParam | nu
   return null
 }
 
+/**
+ * The invite link players share. `?start=` always works: Telegram sends the bot
+ * `/start ref_<code>`, the bot remembers the code, and the first app open is bound.
+ * (`?startapp=` links, which open the app directly, are also accepted, but they
+ * only carry the code when the bot's Main Mini App is set in BotFather.)
+ */
 export function referralLink(botUsername: string, code: string): string {
-  return `https://t.me/${botUsername.replace(/^@/, '')}?startapp=ref_${code}`
+  return `https://t.me/${botUsername.replace(/^@/, '')}?start=ref_${code}`
 }
