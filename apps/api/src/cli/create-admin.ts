@@ -3,6 +3,7 @@
  * add admins from the admin screen):
  *
  *   pnpm --filter @raffwin/api admin:create --username daniel --name "Daniel Ishaku" --telegram ada_obi --role super_admin
+ *   ... --telegram first-signin   (first admin only: the first account to complete the bot sign-in claims it)
  *   node --env-file=.env dist/create-admin.js --username ... --name ... --telegram ... --role ...   (on the server)
  *
  * Prints a generated password ONCE; only its argon2id hash is stored. The
@@ -11,6 +12,7 @@
 import { parseArgs } from 'node:util'
 import { appendAudit } from '../admin/audit'
 import { createBody, generatePassword } from '../admin/admins'
+import { FIRST_SIGNIN_CLAIM } from '../bot/admin-login'
 import { hashPassword } from '../admin/session'
 import { loadConfig } from '../config'
 import { createDb, uniqueViolation } from '../db/client'
@@ -20,13 +22,20 @@ async function main() {
   const { values } = parseArgs({
     options: { username: { type: 'string' }, name: { type: 'string' }, telegram: { type: 'string' }, role: { type: 'string' } },
   })
-  const parsed = createBody.safeParse({ username: values.username, name: values.name, telegramUsername: values.telegram, role: values.role })
+  // --telegram first-signin: the first Telegram account to complete the whole bot sign-in claims this admin
+  const claim = values.telegram === 'first-signin'
+  const parsed = createBody.safeParse({
+    username: values.username,
+    name: values.name,
+    telegramUsername: claim ? 'placeholder_ok' : values.telegram,
+    role: values.role,
+  })
   if (!parsed.success) {
     console.error(parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n'))
     console.error(`usage: admin:create --username <name> --name "<full name>" --telegram <telegram username> --role <${ADMIN_ROLES.join('|')}>`)
     process.exit(2)
   }
-  const body = parsed.data
+  const body = { ...parsed.data, telegramUsername: claim ? FIRST_SIGNIN_CLAIM : parsed.data.telegramUsername }
   const config = loadConfig()
   const handle = createDb(config.DATABASE_URL, { max: 1 })
   const password = generatePassword()
@@ -55,9 +64,11 @@ async function main() {
       `Admin created: ${body.name} (${body.role})`,
       `  username:           ${body.username}`,
       `  password (once):    ${password}`,
-      `  Telegram account:   @${body.telegramUsername} (bound on first sign-in)`,
+      claim
+        ? '  Telegram account:   the first one to complete the bot sign-in claims this admin'
+        : `  Telegram account:   @${body.telegramUsername} (bound on first sign-in)`,
       '',
-      `To sign in: send /${config.ADMIN_BOT_COMMAND} to the bot from @${body.telegramUsername},`,
+      `To sign in: send /${config.ADMIN_BOT_COMMAND} to the bot${claim ? '' : ` from @${body.telegramUsername}`},`,
       'then the master password, the username and the password.',
       '',
     ].join('\n'),

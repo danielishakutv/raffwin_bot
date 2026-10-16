@@ -3,6 +3,7 @@ import type { Transformer } from 'grammy'
 import { pino } from 'pino'
 import { describe, expect, it } from 'vitest'
 import { hashPassword } from '../src/admin/session'
+import { FIRST_SIGNIN_CLAIM } from '../src/bot/admin-login'
 import { createBot } from '../src/bot/bot'
 import { adminUsers, securityEvents } from '../src/db/schema'
 import { BOT_TOKEN, initData, telegramId, testApp } from './helpers'
@@ -147,6 +148,23 @@ describe('bot admin sign-in', () => {
     // Someone else later takes the same Telegram username
     const other = { id: telegramId(), username: tgName }
     for (const t of ['/staffdesk', MASTER, admin.username, 'pw-own']) await h.send(other, t)
+    expect(h.replies().at(-1)).toBe('That did not work. Send the admin command again to start over.')
+  })
+
+  it('lets the first account to complete sign-in claim a first-signin admin, then binds it', async () => {
+    const [claimable] = await db
+      .insert(adminUsers)
+      .values({ name: 'First Admin', username: `first_${telegramId()}`, telegramUsername: FIRST_SIGNIN_CLAIM, role: 'super_admin', passwordHash: await hashPassword('pw-first') })
+      .returning()
+    const me = { id: telegramId(), username: 'daniel_real' }
+    const h = harness()
+    for (const t of ['/staffdesk', MASTER, claimable!.username!, 'pw-first']) await h.send(me, t)
+    expect(String(h.calls.filter((c) => c.method === 'sendMessage').at(-1)?.payload.text)).toMatch(/^Signed in as First Admin/)
+    const [row] = await db.select().from(adminUsers).where(eq(adminUsers.id, claimable!.id))
+    expect(row).toMatchObject({ telegramId: me.id, telegramUsername: 'daniel_real' })
+    // Claimed: nobody else can use it now
+    const other = { id: telegramId(), username: 'someone_else' }
+    for (const t of ['/staffdesk', MASTER, claimable!.username!, 'pw-first']) await h.send(other, t)
     expect(h.replies().at(-1)).toBe('That did not work. Send the admin command again to start over.')
   })
 

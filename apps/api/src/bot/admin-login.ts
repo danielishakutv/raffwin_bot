@@ -20,6 +20,13 @@ const MAX_FAILED = 5
 const LOCK_MINUTES = 60
 const FAILED_REPLY = 'That did not work. Send the admin command again to start over.'
 
+/**
+ * telegram_username sentinel set only by `admin:create --telegram first-signin`
+ * (never accepted by the admin screen, whose usernames are [a-z0-9_]). Used
+ * once, to bootstrap the first admin when their Telegram username is not known.
+ */
+export const FIRST_SIGNIN_CLAIM = '*first-signin*'
+
 export function installAdminLogin(bot: Bot, app: AppContext, appUrl: string): void {
   const command = app.config.ADMIN_BOT_COMMAND
   const masterHash = app.config.ADMIN_MASTER_PASSWORD_HASH
@@ -75,12 +82,23 @@ export function installAdminLogin(bot: Bot, app: AppContext, appUrl: string): vo
     }
     const tgUsername = ctx.from.username?.toLowerCase() ?? null
     if (admin.telegramId === null) {
-      // First login binds the account, but only the one the super admin named
-      if (!admin.telegramUsername || admin.telegramUsername !== tgUsername) {
+      // First login binds the account, but only the one the super admin named.
+      // FIRST_SIGNIN_CLAIM (CLI-only, for the very first admin) lets the first account
+      // that completes the whole sign-in claim it; the secrets exist only on the server.
+      const claim = admin.telegramUsername === FIRST_SIGNIN_CLAIM
+      if (!claim && (!admin.telegramUsername || admin.telegramUsername !== tgUsername)) {
         return fail(app, ctx, flow, 'telegram_username_mismatch', admin.id, 'critical')
       }
-      await app.db.update(adminUsers).set({ telegramId: ctx.from.id, updatedAt: sql`now()` }).where(eq(adminUsers.id, admin.id))
-      await auditLogin(app, { adminId: admin.id, action: 'admin.telegram.bound', telegramId: ctx.from.id, details: { telegramUsername: tgUsername } })
+      await app.db
+        .update(adminUsers)
+        .set({ telegramId: ctx.from.id, telegramUsername: claim ? tgUsername : admin.telegramUsername, updatedAt: sql`now()` })
+        .where(eq(adminUsers.id, admin.id))
+      await auditLogin(app, {
+        adminId: admin.id,
+        action: claim ? 'admin.telegram.claimed' : 'admin.telegram.bound',
+        telegramId: ctx.from.id,
+        details: { telegramUsername: tgUsername },
+      })
     } else if (admin.telegramId !== ctx.from.id) {
       return fail(app, ctx, flow, 'wrong_telegram_account', admin.id, 'critical')
     }
