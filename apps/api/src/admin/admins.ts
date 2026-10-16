@@ -5,7 +5,7 @@
  * will be bound to on first sign-in.
  */
 import { randomInt } from 'node:crypto'
-import { asc, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, ne, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../context'
 import { uniqueViolation } from '../db/client'
@@ -13,7 +13,7 @@ import { ADMIN_ROLES, adminSessions, adminUsers, type AdminUserRow } from '../db
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
 import { appendAudit } from './audit'
-import { hashPassword } from './session'
+import { hashPassword, verifyPassword } from './session'
 
 export const createBody = z.object({
   name: z.string().trim().min(2).max(80),
@@ -130,4 +130,41 @@ export async function setStatus(ctx: AppContext, byAdminId: string, id: string, 
     return updated
   })
   return toAccount(row)
+}
+
+export const passwordBody = z.object({
+  current: z.string().min(1).max(200),
+  next: z.string().min(12, 'Use at least 12 characters').max(200),
+})
+
+/** An admin changes their own password; every other session of theirs ends. */
+export async function changeOwnPassword(
+  ctx: AppContext,
+  adminId: string,
+  keepSessionId: string,
+  body: z.infer<typeof passwordBody>,
+): Promise<void> {
+  const [admin] = await ctx.db.select().from(adminUsers).where(eq(adminUsers.id, adminId))
+  if (!admin) throw new HttpError('NOT_FOUND', 'No such admin.')
+  if (!(await verifyPassword(admin.passwordHash, body.current))) {
+    await recordSecurityEvent(ctx.db, ctx.log, {
+      severity: 'medium',
+      category: 'admin',
+      kind: 'admin_password_change_wrong_current',
+      ipHash: null,
+      route: 'POST /admin/v1/me/password',
+      details: { adminId },
+    })
+    throw new HttpError('INVALID_INPUT', 'Your current password is not right.', { current: 'Not right' })
+  }
+  if (body.next === body.current) throw new HttpError('INVALID_INPUT', 'Choose a password you have not used here.', { next: 'Same as before' })
+  const passwordHash = await hashPassword(body.next)
+  await ctx.db.transaction(async (tx) => {
+    await tx.update(adminUsers).set({ passwordHash, updatedAt: sql`now()` }).where(eq(adminUsers.id, adminId))
+    await tx
+      .update(adminSessions)
+      .set({ revokedAt: sql`now()` })
+      .where(and(eq(adminSessions.adminId, adminId), ne(adminSessions.id, keepSessionId), sql`${adminSessions.revokedAt} is null`))
+    await appendAudit(tx, { adminId, action: 'admin.password.changed', targetType: 'admin', targetId: adminId })
+  })
 }

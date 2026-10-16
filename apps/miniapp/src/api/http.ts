@@ -99,6 +99,11 @@ export function getRate(): Promise<RateQuote> {
 /* Raffles -------------------------------------------------------------------- */
 
 /** The small snapshot polled every few seconds (counts, balance, raffle states). */
+/** Admin card button: the bot asks this account for the master password in the chat. */
+export function startAdminSignIn(): Promise<{ ok: boolean }> {
+  return call('POST', '/v1/admin-signin')
+}
+
 export function getLive(): Promise<LiveSnapshot> {
   return call<LiveSnapshot>('GET', '/v1/live')
 }

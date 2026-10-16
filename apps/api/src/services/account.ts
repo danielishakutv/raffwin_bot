@@ -6,7 +6,7 @@
  * player's nearest motor park. Responses use the shared shapes, so the Mini
  * App reads them exactly like the mock API.
  */
-import { and, eq, ne, sql } from 'drizzle-orm'
+import { and, eq, isNull, ne, or, sql } from 'drizzle-orm'
 import { normalizeNigerianPhone, type Bootstrap, type ContactPrefs, type Profile } from '@raffwin/shared'
 import type { KycBody, ProfilePatchBody } from '@raffwin/shared/schemas'
 import type { AppContext, RequestMeta } from '../context'
@@ -47,11 +47,26 @@ async function loadDelivery(ctx: AppContext, userId: string): Promise<DeliveryPo
   return row ?? null
 }
 
-async function isAdminAccount(ctx: AppContext, telegramId: number): Promise<boolean> {
+/**
+ * True for an active admin's Telegram account: the one it is bound to, or,
+ * before its first sign-in, the account whose username the super admin named.
+ * This only decides whether the app shows the Admin card; getting in still
+ * needs the full bot sign-in.
+ */
+export async function isAdminAccount(ctx: AppContext, user: Pick<UserRow, 'telegramId' | 'tgUsername'>): Promise<boolean> {
+  const tgUsername = user.tgUsername?.toLowerCase() ?? null
   const [row] = await ctx.db
     .select({ id: adminUsers.id })
     .from(adminUsers)
-    .where(and(eq(adminUsers.telegramId, telegramId), eq(adminUsers.status, 'active')))
+    .where(
+      and(
+        eq(adminUsers.status, 'active'),
+        or(
+          eq(adminUsers.telegramId, user.telegramId),
+          tgUsername ? and(isNull(adminUsers.telegramId), eq(adminUsers.telegramUsername, tgUsername)) : undefined,
+        ),
+      ),
+    )
   return !!row
 }
 
@@ -66,7 +81,7 @@ function requireAccount(user: UserRow): void {
 }
 
 async function profileOf(ctx: AppContext, user: UserRow): Promise<Profile> {
-  const [delivery, admin] = await Promise.all([loadDelivery(ctx, user.id), isAdminAccount(ctx, user.telegramId)])
+  const [delivery, admin] = await Promise.all([loadDelivery(ctx, user.id), isAdminAccount(ctx, user)])
   const profile = toProfile(user, delivery, admin)
   if (!profile) throw new HttpError('NOT_SIGNED_IN', 'Close Raffle Win and open it again from the bot.')
   return profile

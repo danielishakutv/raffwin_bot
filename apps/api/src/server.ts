@@ -7,6 +7,7 @@ import { pino } from 'pino'
 import { createApp } from './app'
 import { loadConfig } from './config'
 import { createDb } from './db/client'
+import { Api } from 'grammy'
 import { AccessTokens } from './lib/access-token'
 
 const config = loadConfig()
@@ -27,12 +28,16 @@ const log = pino({
 })
 
 const handle = createDb(config.DATABASE_URL)
+const botApi = new Api(config.BOT_TOKEN)
 const app = createApp({
   config,
   db: handle.db,
   log,
   tokens: new AccessTokens(config.JWT_SECRET, config.ACCESS_TOKEN_TTL_SECONDS),
   now: Date.now,
+  sendTelegram: async (chatId, text) => {
+    await botApi.sendMessage(chatId, text)
+  },
 })
 
 const server = app.listen(config.PORT, config.HOST, () => {

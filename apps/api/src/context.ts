@@ -11,6 +11,8 @@ export interface AppContext {
   tokens: AccessTokens
   /** Injectable clock so tests can move time */
   now: () => number
+  /** Sends a plain-text bot message to a chat (the API's own bot); tests capture it instead */
+  sendTelegram?: (chatId: number, text: string) => Promise<void>
 }
 
 /** What every request handler knows about the caller, for logs and security events. */

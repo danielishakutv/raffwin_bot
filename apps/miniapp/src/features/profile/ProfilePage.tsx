@@ -2,7 +2,9 @@ import { motion } from 'framer-motion'
 import { Bell, ChevronRight, History, MapPin, Settings2, ShieldCheck, Ticket, Trophy, UserPlus, UserRound, Wrench } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { usingRealApi } from '@/api'
+import { startAdminSignIn, usingRealApi } from '@/api'
+import { errorMessage } from '@/api/errors'
+import { getWebApp } from '@/services/telegram'
 import { staggerContainer, popIn } from '@/components/motion'
 import { AboutSoftware } from '@/components/ui/AboutSoftware'
 import { Avatar } from '@/components/ui/Avatar'
@@ -128,6 +130,21 @@ export function ProfilePage() {
 function AdminEntry() {
   const navigate = useNavigate()
   const unlocked = useAdminSession((s) => s.token !== null)
+  const [state, setState] = useState<'idle' | 'busy' | 'sent'>('idle')
+  const [error, setError] = useState<string | null>(null)
+  const start = async () => {
+    setState('busy')
+    setError(null)
+    try {
+      await startAdminSignIn()
+      setState('sent')
+      // The rest happens in the chat: close the app so the bot's question is in view
+      window.setTimeout(() => getWebApp()?.close(), 1500)
+    } catch (e) {
+      setError(errorMessage(e))
+      setState('idle')
+    }
+  }
   return (
     <motion.section variants={popIn} className="rounded-card border border-white/20 bg-white p-4 text-black">
       <p className="text-[15px] font-bold">Admin</p>
@@ -135,8 +152,16 @@ function AdminEntry() {
         <button type="button" onClick={() => navigate('/admin')} className="mt-2 w-full rounded-lg bg-black py-2.5 text-[14px] font-bold text-white">
           Open the admin screen
         </button>
+      ) : state === 'sent' ? (
+        <p className="mt-1 text-[13px]">The bot has messaged you. Answer it in the chat with the master password, your admin username and your password. It then sends an Open admin button.</p>
       ) : (
-        <p className="mt-1 text-[13px]">Locked. Sign in from the bot chat with the admin command; the bot replies with an Open admin button.</p>
+        <>
+          <p className="mt-1 text-[13px]">Locked. Signing in happens in the bot chat and needs the master password, your admin username and password.</p>
+          <button type="button" disabled={state === 'busy'} onClick={() => void start()} className="mt-2 w-full rounded-lg bg-black py-2.5 text-[14px] font-bold text-white disabled:opacity-50">
+            {state === 'busy' ? 'Asking the bot...' : 'Start admin sign-in'}
+          </button>
+          {error && <p className="mt-2 text-[12px] font-semibold">Error: {error}</p>}
+        </>
       )}
     </motion.section>
   )

@@ -235,6 +235,10 @@ export async function getRate(): Promise<RateQuote> {
  * -------------------------------------------------------------------------- */
 
 /** Same shape as the live API's snapshot, read from the demo database. */
+export async function startAdminSignIn(): Promise<{ ok: boolean }> {
+  throw new ApiError('NOT_READY', 'The demo has no admin.')
+}
+
 export async function getLive(): Promise<LiveSnapshot> {
   await jitter(80, 60)
   const db = loadDb()

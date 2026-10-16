@@ -25,6 +25,7 @@ import { recentTransactions } from '../services/ledger'
 import * as raffles from '../services/raffles'
 import { currentQuote, toRateQuote } from '../services/rates'
 import * as referrals from '../services/referrals'
+import { MASTER_PROMPT, startAdminSignIn } from '../bot/admin-login'
 import { authOf, requestMeta, requireAuth } from './middleware'
 
 export function v1Routes(ctx: AppContext): Router {
@@ -118,6 +119,26 @@ export function v1Routes(ctx: AppContext): Router {
 
   router.get('/transactions', authed, async (req, res) => {
     res.json(await recentTransactions(ctx.db, me(req).id))
+  })
+
+  /* Admin sign-in from the app ------------------------------------------ */
+
+  // The Admin card's button: the bot then asks this account for the master password in the chat
+  router.post('/admin-signin', authed, async (req, res) => {
+    const user = me(req)
+    if (!ctx.config.ADMIN_MASTER_PASSWORD_HASH) throw new HttpError('NOT_READY', 'Admin sign-in is not set up on this server.')
+    if (!(await account.isAdminAccount(ctx, user))) throw new HttpError('FORBIDDEN', 'This Telegram account is not an admin.')
+    // In a private chat with the bot, the chat id is the user's Telegram id
+    const started = await startAdminSignIn(ctx, user.telegramId, user.telegramId, 'app')
+    if (started === 'locked') throw new HttpError('RATE_LIMITED', 'Too many failed admin sign-ins. Try again in an hour.')
+    if (!ctx.sendTelegram) throw new HttpError('NOT_READY', 'The bot cannot send messages from this server.')
+    try {
+      await ctx.sendTelegram(user.telegramId, MASTER_PROMPT)
+    } catch (error) {
+      ctx.log.warn({ err: error, telegramId: user.telegramId }, 'admin sign-in prompt not delivered')
+      throw new HttpError('SERVER_ERROR', 'The bot could not message you. Open the bot chat, press Start, then try again.')
+    }
+    res.json({ ok: true })
   })
 
   /* Referrals ------------------------------------------------------------- */

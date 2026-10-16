@@ -35,21 +35,8 @@ export function installAdminLogin(bot: Bot, app: AppContext, appUrl: string): vo
 
   bot.command(command, async (ctx) => {
     if (ctx.chat?.type !== 'private' || !ctx.from) return
-    const now = app.now()
-    const [flow] = await app.db.select().from(adminLoginFlows).where(eq(adminLoginFlows.telegramId, ctx.from.id))
-    if (flow?.lockedUntil && flow.lockedUntil.getTime() > now) {
-      await ctx.reply(FAILED_REPLY)
-      return
-    }
-    await app.db
-      .insert(adminLoginFlows)
-      .values({ telegramId: ctx.from.id, chatId: ctx.chat.id, step: 'master', expiresAt: new Date(now + STEP_MINUTES * 60_000) })
-      .onConflictDoUpdate({
-        target: adminLoginFlows.telegramId,
-        set: { chatId: ctx.chat.id, step: 'master', username: null, expiresAt: new Date(now + STEP_MINUTES * 60_000), updatedAt: sql`now()` },
-      })
-    await auditLogin(app, { adminId: null, action: 'admin.login.started', telegramId: ctx.from.id })
-    await ctx.reply('Admin sign-in. Send the master password. Each message is deleted as soon as it is read.')
+    const started = await startAdminSignIn(app, ctx.from.id, ctx.chat.id, 'command')
+    await ctx.reply(started === 'locked' ? FAILED_REPLY : MASTER_PROMPT)
   })
 
   // Runs before the generic message handler; passes through anything that is not part of a sign-in
@@ -116,6 +103,34 @@ export function installAdminLogin(bot: Bot, app: AppContext, appUrl: string): vo
       reply_markup: new InlineKeyboard().webApp('Open admin', url.toString()),
     })
   })
+}
+
+export const MASTER_PROMPT = 'Admin sign-in. Send the master password. Each message is deleted as soon as it is read.'
+
+/**
+ * Puts a Telegram account at the first step (master password) of the sign-in.
+ * Used by the hidden command and by the "Start admin sign-in" button in the app.
+ * A locked account stays locked; nothing else is checked or revealed here.
+ */
+export async function startAdminSignIn(
+  app: AppContext,
+  telegramId: number,
+  chatId: number,
+  via: 'command' | 'app',
+): Promise<'started' | 'locked'> {
+  const now = app.now()
+  const [flow] = await app.db.select().from(adminLoginFlows).where(eq(adminLoginFlows.telegramId, telegramId))
+  if (flow?.lockedUntil && flow.lockedUntil.getTime() > now) return 'locked'
+  const expiresAt = new Date(now + STEP_MINUTES * 60_000)
+  await app.db
+    .insert(adminLoginFlows)
+    .values({ telegramId, chatId, step: 'master', expiresAt })
+    .onConflictDoUpdate({
+      target: adminLoginFlows.telegramId,
+      set: { chatId, step: 'master', username: null, expiresAt, updatedAt: sql`now()` },
+    })
+  await auditLogin(app, { adminId: null, action: 'admin.login.started', telegramId, details: { via } })
+  return 'started'
 }
 
 /** Deletes the message that carried a secret; if Telegram refuses, says so instead of leaving it silently. */

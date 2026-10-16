@@ -522,6 +522,7 @@ function SettingsTab({ can }: { can: string[] }) {
   if (!s || !limits) return <p>Loading...</p>
   return (
     <>
+      <MyPassword />
       <Err message={action.error} />
       {msg && <p className="my-2 border border-black p-2">{msg}</p>}
       <H>Rate</H>
@@ -582,6 +583,49 @@ function SettingsTab({ can }: { can: string[] }) {
         </button>
       )}
     </>
+  )
+}
+
+function MyPassword() {
+  const action = useAction()
+  const [form, setForm] = useState({ current: '', next: '', again: '' })
+  const [done, setDone] = useState(false)
+  const mismatch = form.again !== '' && form.next !== form.again
+  return (
+    <div className="mb-4 border border-black p-3">
+      <p className="font-bold">My password</p>
+      <p className="text-[12px]">At least 12 characters. Your other admin sessions end when you change it.</p>
+      <Err message={action.error} />
+      {done && <p className="my-2 border border-black p-2">Password changed.</p>}
+      {(
+        [
+          ['current', 'Current password'],
+          ['next', 'New password'],
+          ['again', 'New password again'],
+        ] as ['current' | 'next' | 'again', string][]
+      ).map(([k, label]) => (
+        <label key={k} className="mt-2 grid gap-0.5 text-[12px]">
+          {label}
+          <input className={input} type="password" autoComplete={k === 'current' ? 'current-password' : 'new-password'} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
+        </label>
+      ))}
+      {mismatch && <p className="mt-1 text-[12px]">The two new passwords differ.</p>}
+      <button
+        type="button"
+        className={`${btnSolid} mt-3`}
+        disabled={action.busy || !form.current || form.next.length < 12 || mismatch || form.next !== form.again}
+        onClick={() =>
+          void action.run(() => adminCall('POST', '/me/password', { current: form.current, next: form.next })).then((r) => {
+            if (r) {
+              setDone(true)
+              setForm({ current: '', next: '', again: '' })
+            }
+          })
+        }
+      >
+        Change my password
+      </button>
+    </div>
   )
 }
 

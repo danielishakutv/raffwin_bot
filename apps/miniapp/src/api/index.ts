@@ -27,6 +27,7 @@ export const submitVerification = impl.submitVerification
 export const setVerificationStatus = impl.setVerificationStatus
 export const getRate = impl.getRate
 export const getLive = impl.getLive
+export const startAdminSignIn = impl.startAdminSignIn
 export const getRaffles = impl.getRaffles
 export const getRaffle = impl.getRaffle
 export const enterRaffle = impl.enterRaffle

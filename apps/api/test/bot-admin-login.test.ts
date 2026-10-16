@@ -168,6 +168,61 @@ describe('bot admin sign-in', () => {
     expect(h.replies().at(-1)).toBe('That did not work. Send the admin command again to start over.')
   })
 
+  it('shows the Admin card to a named admin before first sign-in, and the button starts the sign-in in the chat', async () => {
+    const tgName = `pend_${telegramId()}`
+    const admin = await adminAccount(tgName, 'pw-pending')
+    const sent: { chatId: number; text: string }[] = []
+    ctx.sendTelegram = async (chatId, text) => {
+      sent.push({ chatId, text })
+    }
+    const me = { id: telegramId(), username: tgName }
+    const login = await http.post('/v1/auth/telegram').send({ initData: initData({ id: me.id, username: tgName }) })
+    const auth = { authorization: `Bearer ${login.body.accessToken}` }
+    expect((await http.get('/v1/bootstrap').set(auth)).body.profile.isAdmin).toBe(true)
+
+    const start = await http.post('/v1/admin-signin').set(auth)
+    expect(start.status, JSON.stringify(start.body)).toBe(200)
+    expect(sent).toEqual([{ chatId: me.id, text: 'Admin sign-in. Send the master password. Each message is deleted as soon as it is read.' }])
+
+    // The conversation continues in the chat exactly as after the hidden command
+    const h = harness()
+    for (const t of [MASTER, admin.username, 'pw-pending']) await h.send(me, t)
+    expect(h.replies().at(-1)).toMatch(/^Signed in as Ada Admin/)
+  })
+
+  it('refuses the sign-in button for a player who is not an admin', async () => {
+    const id = telegramId()
+    const login = await http.post('/v1/auth/telegram').send({ initData: initData({ id, username: `plain_${id}` }) })
+    const res = await http.post('/v1/admin-signin').set('authorization', `Bearer ${login.body.accessToken}`)
+    expect(res.status).toBe(403)
+  })
+
+  it('lets a signed-in admin change their own password; the old one stops working', async () => {
+    const tgName = `chg_${telegramId()}`
+    const admin = await adminAccount(tgName, 'old-password-123')
+    const me = { id: telegramId(), username: tgName }
+    const h = harness()
+    for (const t of ['/staffdesk', MASTER, admin.username, 'old-password-123']) await h.send(me, t)
+    const last = h.calls.filter((c) => c.method === 'sendMessage').at(-1)
+    const url = (last?.payload.reply_markup as { inline_keyboard: { web_app: { url: string } }[][] }).inline_keyboard[0]?.[0]?.web_app.url ?? ''
+    const ticket = new URL(url).searchParams.get('admin_ticket')
+    const session = await http.post('/admin/v1/auth/ticket').send({ ticket, initData: initData({ id: me.id }) })
+    const bearer = { authorization: `Bearer ${session.body.token}` }
+
+    const wrong = await http.post('/admin/v1/me/password').set(bearer).send({ current: 'nope', next: 'a-brand-new-password' })
+    expect(wrong.status).toBe(400)
+    const short = await http.post('/admin/v1/me/password').set(bearer).send({ current: 'old-password-123', next: 'short' })
+    expect(short.status).toBe(400)
+    const ok = await http.post('/admin/v1/me/password').set(bearer).send({ current: 'old-password-123', next: 'a-brand-new-password' })
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200)
+    expect((await http.get('/admin/v1/me').set(bearer)).status).toBe(200) // this session survives
+
+    for (const t of ['/staffdesk', MASTER, admin.username, 'old-password-123']) await h.send(me, t)
+    expect(h.replies().at(-1)).toBe('That did not work. Send the admin command again to start over.')
+    for (const t of ['/staffdesk', MASTER, admin.username, 'a-brand-new-password']) await h.send(me, t)
+    expect(h.replies().at(-1)).toMatch(/^Signed in as Ada Admin/)
+  })
+
   it('locks a Telegram account out after 5 failures', async () => {
     const me = { id: telegramId(), username: 'locked_out' }
     const h = harness()

@@ -66,6 +66,11 @@ export function adminRoutes(ctx: AppContext): Router {
   r.get('/me', authed, (req, res) => {
     res.json(me(req))
   })
+  // Change your own password: the current one is required; your other sessions end
+  r.post('/me/password', authed, async (req, res) => {
+    await admins.changeOwnPassword(ctx, adminOf(req).user.id, adminOf(req).sessionId, admins.passwordBody.parse(req.body))
+    res.json({ ok: true })
+  })
 
   /* Overview --------------------------------------------------------------- */
 
