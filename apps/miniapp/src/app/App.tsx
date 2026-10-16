@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { HashRouter, useNavigate } from 'react-router-dom'
-import { unlockFromUrl } from '@/features/admin/adminSession'
+import { resumeStored, unlockFromUrl } from '@/features/admin/adminSession'
 import { AppRoutes } from './router'
 import { TelegramGate } from './TelegramGate'
 import { Orbs } from '@/components/ui/Orbs'
@@ -13,12 +13,16 @@ import { installAudioUnlock } from '@/services/sound'
 import { initTelegram, isInsideTelegram } from '@/services/telegram'
 import { useAppStore } from '@/store/useAppStore'
 
-/** Opened from the bot's "Open admin" button: exchange the one-time ticket, then go to the admin screen. */
+/**
+ * Opened from the bot's "Open admin" button: exchange the one-time ticket, then
+ * go to the admin screen. Otherwise resume a stored super admin session, if any.
+ */
 function AdminTicket() {
   const navigate = useNavigate()
   useEffect(() => {
     void unlockFromUrl().then((hadTicket) => {
       if (hadTicket) navigate('/admin', { replace: true })
+      else void resumeStored()
     })
   }, [navigate])
   return null

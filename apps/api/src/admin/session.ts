@@ -14,7 +14,9 @@
  * A successful login hands out a one-time ticket (5 minutes) on an "Open
  * admin" button. The admin screen exchanges it, together with the Mini App's
  * signed initData for the same Telegram account, for a bearer token: 8 h
- * absolute, 30 min idle, revocable, held in memory only. Every login attempt
+ * absolute, 30 min idle (2 h for super admins), revocable. Super admins may
+ * keep it in Telegram's secure storage on their phone; reopening the Mini App
+ * resumes it only with fresh initData from the bound account (resumeSession). Every login attempt
  * and every admin request is written to the hash-chained audit log.
  */
 import { hash as argonHash, verify as argonVerify } from '@node-rs/argon2'
@@ -32,6 +34,11 @@ import { appendAudit } from './audit'
 import { can, type Permission } from './permissions'
 
 export const TICKET_MINUTES = 5
+
+/** Minutes without a request before a session ends, by role */
+export function idleMinutesFor(ctx: AppContext, role: AdminUserRow['role']): number {
+  return role === 'super_admin' ? ctx.config.ADMIN_SUPER_IDLE_MINUTES : ctx.config.ADMIN_IDLE_MINUTES
+}
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace -- Express's own extension point
@@ -167,6 +174,41 @@ export async function exchangeTicket(ctx: AppContext, req: Request): Promise<Adm
   return { admin: result.admin, token: result.token, expiresAt: result.expiresAt }
 }
 
+export const resumeBody = z.object({ initData: z.string().min(1).max(8192) })
+
+/**
+ * Reopening the Mini App with a stored session token: it carries on only when
+ * fresh initData proves the same bound Telegram account is holding it. A token
+ * presented from any other account is revoked on the spot.
+ */
+export async function resumeSession(ctx: AppContext, req: Request): Promise<{ expiresAt: number }> {
+  const { user, sessionId } = adminOf(req)
+  const body = resumeBody.parse(req.body)
+  const meta = requestMeta(ctx, req)
+  const verified = verifyTelegramData(body.initData, ctx.config.BOT_TOKEN, { maxAgeSeconds: ctx.config.INITDATA_MAX_AGE_SECONDS, now: ctx.now() })
+  const tg = verified.ok ? readInitDataUser(verified.fields) : null
+  if (!tg || tg.id !== user.telegramId) {
+    await ctx.db.transaction(async (tx) => {
+      await tx.update(adminSessions).set({ revokedAt: sql`now()` }).where(eq(adminSessions.id, sessionId))
+      await appendAudit(tx, { adminId: user.id, action: 'admin.session.resume_refused', targetType: 'admin', targetId: user.id, after: { telegramId: tg?.id ?? null }, ipHash: meta.ipHash })
+    })
+    await recordSecurityEvent(ctx.db, ctx.log, {
+      severity: 'high',
+      category: 'admin',
+      kind: verified.ok ? 'admin_resume_other_account' : `admin_resume_initdata_${verified.reason}`,
+      ipHash: meta.ipHash,
+      route: meta.route,
+      requestId: meta.requestId,
+      details: { adminId: user.id, telegramId: tg?.id ?? null },
+      actionTaken: 'blocked',
+    })
+    throw new HttpError('AUTH_INVALID', 'This admin session cannot be resumed here. Sign in from the bot again.')
+  }
+  const [s] = await ctx.db.select({ expiresAt: adminSessions.expiresAt }).from(adminSessions).where(eq(adminSessions.id, sessionId))
+  await auditLogin(ctx, { adminId: user.id, action: 'admin.session.resume', telegramId: tg.id, ipHash: meta.ipHash })
+  return { expiresAt: s?.expiresAt.getTime() ?? ctx.now() }
+}
+
 export async function logout(ctx: AppContext, req: Request): Promise<void> {
   const { user, sessionId } = adminOf(req)
   await ctx.db.transaction(async (tx) => {
@@ -192,10 +234,10 @@ export function requireAdmin(ctx: AppContext): RequestHandler {
           eq(adminSessions.tokenHash, sha256Hex(token)),
           isNull(adminSessions.revokedAt),
           gt(adminSessions.expiresAt, new Date(now)),
-          gt(adminSessions.lastSeenAt, new Date(now - ctx.config.ADMIN_IDLE_MINUTES * 60_000)),
         ),
       )
-    if (!row || row.admin.status !== 'active') {
+    const idle = row ? now - row.session.lastSeenAt.getTime() > idleMinutesFor(ctx, row.admin.role) * 60_000 : false
+    if (!row || row.admin.status !== 'active' || idle) {
       throw new HttpError('AUTH_INVALID', 'Your admin session has ended. Unlock it from the bot again.')
     }
     if (now - row.session.lastSeenAt.getTime() > 60_000) {

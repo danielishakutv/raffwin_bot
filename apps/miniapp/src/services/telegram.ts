@@ -62,8 +62,19 @@ export interface TelegramWebApp {
   isVersionAtLeast?(version: string): boolean
   /** Bot API 6.9+. Asks the user to share their own phone number with the bot. */
   requestContact?(callback: (shared: boolean, result?: RequestContactResult) => void): void
+  SecureStorage?: SecureStorage
   onEvent(event: string, cb: () => void): void
   offEvent(event: string, cb: () => void): void
+}
+
+/**
+ * Bot API 9.0+: per-bot storage in the phone's Keychain / Keystore. Clients
+ * without it (older apps, some desktops) report an error in the callback.
+ */
+export interface SecureStorage {
+  setItem(key: string, value: string, callback?: (error: string | null, stored?: boolean) => void): void
+  getItem(key: string, callback: (error: string | null, value?: string | null, canRestore?: boolean) => void): void
+  removeItem(key: string, callback?: (error: string | null, removed?: boolean) => void): void
 }
 
 interface RequestContactResult {

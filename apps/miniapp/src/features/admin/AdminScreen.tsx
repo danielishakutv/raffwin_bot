@@ -119,7 +119,7 @@ const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-NG'
 
 export function AdminScreen() {
   const navigate = useNavigate()
-  const { token, me, error } = useAdminSession()
+  const { token, me, error, expiresAt, idleMinutes, kept } = useAdminSession()
   const [tab, setTab] = useState<Tab>('overview')
 
   if (!token || !me) {
@@ -141,15 +141,23 @@ export function AdminScreen() {
       <AskPanel />
       <header className="sticky top-0 z-10 border-b border-black bg-white p-3">
         <div className="flex items-center justify-between">
-          <p className="text-[15px] font-bold">Admin: {me.name} ({me.role})</p>
+          <div>
+            <p className="text-[15px] font-bold">Admin: {me.name} ({me.role})</p>
+            <p className="text-[11px]">
+              Signed in until {expiresAt ? new Date(expiresAt).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }) : '-'}
+              {idleMinutes ? `, locks after ${idleMinutes >= 60 ? `${idleMinutes / 60} h` : `${idleMinutes} min`} unused` : ''}. {kept ?? ''}
+            </p>
+          </div>
           <button
             type="button"
             className={btn}
             onClick={() => {
-              void adminCall('POST', '/auth/logout').finally(() => {
-                useAdminSession.getState().clear()
-                navigate('/profile')
-              })
+              void adminCall('POST', '/auth/logout')
+                .catch((err: unknown) => console.warn('[admin] logout request failed; locking here anyway', err))
+                .finally(() => {
+                  useAdminSession.getState().clear()
+                  navigate('/profile')
+                })
             }}
           >
             Lock

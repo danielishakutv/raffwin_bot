@@ -15,6 +15,8 @@ export interface AdminLoginResponse {
   /** Bearer token for the admin API: keep in memory only */
   token: string
   expiresAt: number
+  /** The session ends after this many minutes without a request (longer for super admins) */
+  idleMinutes: number
   admin: AdminMe
 }
 

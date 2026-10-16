@@ -81,6 +81,31 @@ describe('admin sessions from bot tickets', () => {
     expect((await player.get('/v1/bootstrap')).body.profile.isAdmin).toBe(false)
   })
 
+  it('keeps super admins signed in for 2 hours idle, other roles for 30 minutes', async () => {
+    const boss = await makeAdmin('super_admin')
+    const viewer = await makeAdmin('viewer')
+    const idleFor = (a: Admin, minutes: number) =>
+      db.execute(sql`update admin_sessions set last_seen_at = now() - make_interval(mins => ${minutes}) where admin_id = ${a.id}`)
+    await idleFor(boss, 45)
+    await idleFor(viewer, 45)
+    expect((await get(viewer, '/admin/v1/me')).status).toBe(401)
+    expect((await get(boss, '/admin/v1/me')).status).toBe(200)
+    await idleFor(boss, 125)
+    expect((await get(boss, '/admin/v1/me')).status).toBe(401)
+  })
+
+  it('resumes a stored session only with initData from the bound account', async () => {
+    const boss = await makeAdmin('super_admin')
+    const resumed = await write(boss, '/admin/v1/auth/resume', { initData: initData({ id: boss.telegramId }) })
+    expect(resumed.status, JSON.stringify(resumed.body)).toBe(200)
+    expect(resumed.body).toMatchObject({ token: boss.token, idleMinutes: 120, admin: { role: 'super_admin' } })
+
+    const other = await write(boss, '/admin/v1/auth/resume', { initData: initData({ id: telegramId() }) })
+    expect(other.status).toBe(401)
+    // A token presented from another account is revoked, not just refused
+    expect((await get(boss, '/admin/v1/me')).status).toBe(401)
+  })
+
   it('accepts a ticket once only', async () => {
     const a = await insertAdmin('viewer')
     const ticket = await issueTicket(ctx, a.id, a.telegramId)

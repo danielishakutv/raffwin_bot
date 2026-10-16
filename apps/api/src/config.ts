@@ -72,6 +72,8 @@ const schema = z.object({
   ADMIN_DATA_KEY: z.string().length(43, 'ADMIN_DATA_KEY must be 32 random bytes, base64url (43 characters)').optional(),
   ADMIN_SESSION_HOURS: z.coerce.number().int().min(1).max(24).default(8),
   ADMIN_IDLE_MINUTES: z.coerce.number().int().min(5).max(240).default(30),
+  /** Super admins stay signed in longer between requests (the phone suspends the app in the background) */
+  ADMIN_SUPER_IDLE_MINUTES: z.coerce.number().int().min(5).max(480).default(120),
 })
 
 export type Config = z.infer<typeof schema>

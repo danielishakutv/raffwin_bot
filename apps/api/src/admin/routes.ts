@@ -25,7 +25,7 @@ import { decide, executeDirect, listApprovals, requestApproval } from './approva
 import { verifyChain } from './audit'
 import * as ops from './operations'
 import { permissionsOf } from './permissions'
-import { adminOf, auditEveryRequest, exchangeTicket, logout, requireAdmin, requirePermission } from './session'
+import { adminOf, auditEveryRequest, exchangeTicket, idleMinutesFor, logout, requireAdmin, requirePermission, resumeSession } from './session'
 import * as admins from './admins'
 import * as finance from './finance'
 import type { Period } from './finance'
@@ -72,7 +72,13 @@ export function adminRoutes(ctx: AppContext): Router {
   // One-time ticket from the bot's admin sign-in + this Mini App's initData -> bearer token
   r.post('/auth/ticket', async (req, res) => {
     const { admin, token, expiresAt } = await exchangeTicket(ctx, req)
-    res.json({ token, expiresAt, admin: toMe(admin) })
+    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin.role), admin: toMe(admin) })
+  })
+  // Reopened Mini App with a stored token: fresh initData from the bound account carries the session on
+  r.post('/auth/resume', authed, async (req, res) => {
+    const { expiresAt } = await resumeSession(ctx, req)
+    const token = (req.get('authorization') ?? '').slice(7).trim()
+    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, adminOf(req).user.role), admin: me(req) })
   })
   r.post('/auth/logout', authed, async (req, res) => {
     await logout(ctx, req)
