@@ -47,12 +47,35 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   /** Git commit, set by the deploy script; reported by /health. */
   GIT_COMMIT: z.string().default('unknown'),
+
+  /* Admin ------------------------------------------------------------------ */
+  /** 32 random bytes, base64url: encrypts admin TOTP secrets at rest. Same generator as JWT_SECRET with 32. */
+  ADMIN_DATA_KEY: z.string().length(43, 'ADMIN_DATA_KEY must be 32 random bytes, base64url (43 characters)'),
+  ADMIN_SESSION_HOURS: z.coerce.number().int().min(1).max(24).default(8),
+  ADMIN_IDLE_MINUTES: z.coerce.number().int().min(5).max(240).default(30),
+  /**
+   * Cloudflare Access in front of admin.rafflewin.com.ng (email one-time code).
+   * Team domain, e.g. rafflewin.cloudflareaccess.com, and the application AUD tag.
+   * Required in staging and production: the admin API refuses requests without a valid Access token.
+   */
+  CF_ACCESS_TEAM_DOMAIN: z.string().optional(),
+  CF_ACCESS_AUD: z.string().optional(),
 })
 
 export type Config = z.infer<typeof schema>
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = schema.safeParse(env)
+  const parsed = schema
+    .superRefine((c, ctx) => {
+      if ((c.NODE_ENV === 'production' || c.NODE_ENV === 'staging') && (!c.CF_ACCESS_TEAM_DOMAIN || !c.CF_ACCESS_AUD)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['CF_ACCESS_AUD'],
+          message: 'CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD are required in staging and production',
+        })
+      }
+    })
+    .safeParse(env)
   if (!parsed.success) {
     const lines = parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`)
     throw new Error(`Invalid API environment:\n${lines.join('\n')}`)

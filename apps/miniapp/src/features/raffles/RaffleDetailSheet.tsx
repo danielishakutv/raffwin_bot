@@ -13,8 +13,8 @@ import { useNow } from '@/hooks/useNow'
 import { useRate } from '@/hooks/useRate'
 import { getRaffleStatus, STATUS_LABEL } from '@/data/raffleStatus'
 import type { Raffle } from '@/data/types'
-import { formatDateTime, formatInt, formatNaira, formatRelative } from '@/services/format'
-import { entryCostRaffs } from '@/services/rates'
+import { formatDateTime, formatInt, formatNaira, formatRaffs, formatRelative } from '@/services/format'
+import { raffsToNaira } from '@/services/rates'
 import { useAppStore } from '@/store/useAppStore'
 import { DrawReveal } from './DrawReveal'
 import { EnterRaffleSheet } from './EnterRaffleSheet'
@@ -39,7 +39,8 @@ export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, o
   const live = status === 'open' || status === 'closing_soon'
   const myEntries = raffle ? entries.filter((e) => e.raffleId === raffle.id) : []
   const myTickets = myEntries.reduce((sum, e) => sum + e.qty, 0)
-  const cost = raffle && quote ? entryCostRaffs(raffle.entryPriceNaira, quote) : null
+  const cost = raffle ? raffle.entryPriceRaffs : null
+  const costNaira = raffle && quote ? raffsToNaira(raffle.entryPriceRaffs, quote) : null
   const showEnter = open && (entering || (enterImmediately && live))
 
   const closeEnter = () => {
@@ -100,19 +101,13 @@ export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, o
               <div className="mt-3 grid grid-cols-2 gap-3 text-[13px]">
                 <div>
                   <p className="text-mist">Pool target</p>
-                  <p className="nums font-bold">{formatNaira(raffle.poolTargetNaira)}</p>
+                  <p className="nums font-bold">{formatRaffs(raffle.entriesTarget * raffle.entryPriceRaffs)}</p>
                 </div>
                 <div>
                   <p className="text-mist">Entry price</p>
                   <p className="flex items-center gap-1 font-bold">
-                    {cost !== null ? (
-                      <>
-                        <RaffsCoin size={14} /> <span className="nums">{formatInt(cost)}</span>
-                        <span className="text-haze">({formatNaira(raffle.entryPriceNaira)})</span>
-                      </>
-                    ) : (
-                      <span className="flex items-center gap-1 text-mist"><Spinner className="h-3 w-3" /> Refreshing rate</span>
-                    )}
+                    <RaffsCoin size={14} /> <span className="nums">{formatInt(cost ?? 0)}</span>
+                    {costNaira !== null && <span className="text-haze">(about {formatNaira(costNaira)})</span>}
                   </p>
                 </div>
               </div>

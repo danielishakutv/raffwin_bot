@@ -9,6 +9,10 @@
  */
 import type {
   Bootstrap,
+  Page,
+  ReferralEarning,
+  ReferralSummary,
+  ReferredPerson,
   ContactPrefs,
   DeliveryAddress,
   Entry,
@@ -20,7 +24,9 @@ import type {
 } from '@/data/types'
 import { TAKEN_USERNAMES, seedHistoryForUser } from '@/data/seed'
 import { getRaffleStatus, isEnterable } from '@/data/raffleStatus'
-import { demoQuoteAt, entryCostRaffs, getRateProvider, isRateValid, type RateQuote } from '@/services/rates'
+import { getRateProvider, type RateQuote } from '@/services/rates'
+import { referralLink } from '@raffwin/shared'
+import { env } from '@/services/env'
 import { loadDb, mutateDb, newId, resetDb } from './db'
 import { ApiError } from './errors'
 
@@ -232,8 +238,8 @@ export async function getRaffle(id: string): Promise<Raffle> {
 export interface EnterRaffleRequest {
   raffleId: string
   qty: number
-  /** The quote the user saw. The server re-prices with its own current quote. */
-  rateId: string
+  /** One per confirmation tap: a retry with the same key never makes a second entry */
+  idempotencyKey: string
 }
 
 export interface EnterRaffleResponse {
@@ -247,22 +253,18 @@ export async function enterRaffle(req: EnterRaffleRequest): Promise<EnterRaffleR
   await jitter(900, 500)
   requireProfile()
   const now = Date.now()
-  const quote = demoQuoteAt(now)
-  if (!isRateValid(quote, now) || quote.id !== req.rateId) {
-    throw new ApiError('RATE_EXPIRED', 'The rate has refreshed. Check the new price and try again.')
-  }
   return clone(
     mutateDb((db) => {
       const raffle = db.raffles.find((r) => r.id === req.raffleId)
       if (!raffle) throw new ApiError('NOT_FOUND', 'That raffle no longer exists.')
       if (!isEnterable(raffle, now)) throw new ApiError('RAFFLE_CLOSED', 'Entries for this raffle have closed.')
       const qty = Math.max(1, Math.floor(req.qty))
-      const unitRaffs = entryCostRaffs(raffle.entryPriceNaira, quote)
-      const raffsSpent = unitRaffs * qty
+      const raffsSpent = raffle.entryPriceRaffs * qty
       if (db.balance < raffsSpent) {
         throw new ApiError('INSUFFICIENT_FUNDS', `You need ${raffsSpent - db.balance} more Raffs for this entry.`)
       }
       db.balance -= raffsSpent
+      const ticketFrom = raffle.entriesCount + 1
       raffle.entriesCount += qty
       const profile = db.profile as Profile
       if (!raffle.entrants.includes(profile.username)) raffle.entrants.push(profile.username)
@@ -271,15 +273,16 @@ export async function enterRaffle(req: EnterRaffleRequest): Promise<EnterRaffleR
         raffleId: raffle.id,
         qty,
         raffsSpent,
-        nairaValue: raffle.entryPriceNaira * qty,
-        rateId: quote.id,
+        ticketFrom,
+        ticketTo: raffle.entriesCount,
         createdAt: new Date(now).toISOString(),
       }
       const transaction: Transaction = {
         id: newId('tx'),
         type: 'entry',
         raffs: -raffsSpent,
-        naira: entry.nairaValue,
+        naira: null,
+        stars: null,
         note: `Entry: ${raffle.prizeName} x${qty}`,
         createdAt: entry.createdAt,
         status: 'completed',
@@ -333,6 +336,7 @@ export async function drawRaffle(raffleId: string): Promise<{ raffle: Raffle; ba
             type: 'prize',
             raffs,
             naira: null,
+            stars: null,
             note: `${['1st', '2nd', '3rd'][mySlot.position - 1]} place prize: ${raffle.prizeName} raffle`,
             createdAt: raffle.drawnAt,
             status: 'completed',
@@ -374,6 +378,7 @@ export async function buyRaffs(req: BuyRaffsRequest): Promise<BuyRaffsResponse> 
         type: 'purchase',
         raffs: 0,
         naira: req.naira + req.feeNaira,
+        stars: null,
         note: `Card payment declined (demo)`,
         createdAt: new Date().toISOString(),
         status: 'failed',
@@ -389,6 +394,7 @@ export async function buyRaffs(req: BuyRaffsRequest): Promise<BuyRaffsResponse> 
         type: 'purchase',
         raffs: req.raffs,
         naira: req.naira + req.feeNaira,
+        stars: null,
         note: `Bought Raffs (demo card)`,
         createdAt: new Date().toISOString(),
         status: 'completed',
@@ -407,4 +413,60 @@ export async function getTransactions(): Promise<Transaction[]> {
 export async function getEntries(): Promise<Entry[]> {
   await jitter(300)
   return clone(loadDb().entries)
+}
+
+/* ----------------------------------------------------------------------------
+ * Referrals (demo data: three invented friends)
+ * -------------------------------------------------------------------------- */
+
+const DEMO_FRIENDS = [
+  { username: 'tunde_k', daysAgo: 9, entries: 4, raffsEarned: 20 },
+  { username: 'amaka', daysAgo: 4, entries: 2, raffsEarned: 10 },
+  { username: 'yusuf_b', daysAgo: 1, entries: 0, raffsEarned: 0 },
+]
+
+export async function getReferralSummary(): Promise<ReferralSummary> {
+  await jitter(400)
+  const profile = requireProfile()
+  const lifetime = DEMO_FRIENDS.reduce((sum, f) => sum + f.raffsEarned, 0)
+  return {
+    code: profile.referralCode,
+    link: referralLink(env.botUsername, profile.referralCode),
+    peopleReferred: DEMO_FRIENDS.length,
+    activeThisMonth: DEMO_FRIENDS.filter((f) => f.entries > 0).length,
+    lifetimeRaffs: lifetime,
+    monthRaffs: lifetime,
+  }
+}
+
+export async function getReferredPeople(): Promise<Page<ReferredPerson>> {
+  await jitter(400)
+  requireProfile()
+  const now = Date.now()
+  return {
+    items: DEMO_FRIENDS.map((f) => ({
+      username: f.username,
+      joinedAt: new Date(now - f.daysAgo * 86_400_000).toISOString(),
+      entries: f.entries,
+      raffsEarned: f.raffsEarned,
+    })),
+    nextCursor: null,
+  }
+}
+
+export async function getReferralEarnings(): Promise<Page<ReferralEarning>> {
+  await jitter(400)
+  requireProfile()
+  const now = Date.now()
+  const items: ReferralEarning[] = DEMO_FRIENDS.flatMap((f, i) =>
+    Array.from({ length: f.entries }, (_, n) => ({
+      id: `re-demo-${i}-${n}`,
+      createdAt: new Date(now - (f.daysAgo - n * 0.5) * 86_400_000).toISOString(),
+      username: f.username,
+      raffleName: n % 2 ? 'Oraimo FreePods 4' : 'Samsung Galaxy A15',
+      entryRaffs: 50,
+      earnedRaffs: 5,
+    })),
+  ).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  return { items, nextCursor: null }
 }

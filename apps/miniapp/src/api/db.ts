@@ -7,7 +7,7 @@ import type { Entry, Profile, Raffle, Transaction } from '@/data/types'
 import { seedRaffles } from '@/data/seed'
 
 export interface DbShape {
-  version: 1
+  version: 2
   seededAt: string
   profile: Profile | null
   onboardingComplete: boolean
@@ -17,12 +17,12 @@ export interface DbShape {
   transactions: Transaction[]
 }
 
-const KEY = 'raffwin.demo.db.v1'
+const KEY = 'raffwin.demo.db.v2'
 let cache: DbShape | null = null
 
 function createSeed(now: number = Date.now()): DbShape {
   return {
-    version: 1,
+    version: 2,
     seededAt: new Date(now).toISOString(),
     profile: null,
     onboardingComplete: false,
@@ -38,7 +38,7 @@ function readStorage(): DbShape | null {
     const raw = localStorage.getItem(KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<DbShape>
-    if (parsed.version !== 1 || !Array.isArray(parsed.raffles)) return null
+    if (parsed.version !== 2 || !Array.isArray(parsed.raffles)) return null
     return parsed as DbShape
   } catch (error) {
     console.warn('[db] could not read demo database, reseeding', error)

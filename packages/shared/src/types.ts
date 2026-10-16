@@ -25,20 +25,24 @@ export interface Raffle {
   /** Accent hue (0-360) used for the card gradient and illustration */
   hue: number
   marketPriceNaira: number
-  /** Price of one entry in Naira. Raffs cost is derived from the live rate. */
-  entryPriceNaira: number
-  /** Pool the raffle is aiming for; entriesTarget = poolTargetNaira / entryPriceNaira */
-  poolTargetNaira: number
+  /**
+   * Price of one entry in Raffs, fixed for the life of the raffle. The hourly
+   * rate only affects buying Raffs with Stars, never what an entry costs.
+   */
+  entryPriceRaffs: number
   /** ISO timestamp of the draw moment (the deadline for entries) */
   deadline: string
   entriesCount: number
+  /** Entries on sale; the raffle closes early once they are all sold */
   entriesTarget: number
   description: string
   rules: string[]
   winners: WinnerSlot[]
   /** ISO timestamp once the draw has completed, otherwise null */
   drawnAt: string | null
-  /** Demo entrants (usernames) used by the draw reveal */
+  /** SHA-256 of the draw seed, published while entries are open (milestone 4) */
+  seedCommitment: string | null
+  /** Recent entrants' usernames, for the draw reveal animation */
   entrants: string[]
 }
 
@@ -47,23 +51,89 @@ export interface Entry {
   raffleId: string
   qty: number
   raffsSpent: number
-  nairaValue: number
-  rateId: string
+  /** Ticket numbers this entry holds, inclusive; the draw picks ticket numbers */
+  ticketFrom: number
+  ticketTo: number
   createdAt: string
 }
 
-export type TransactionType = 'purchase' | 'entry' | 'bonus' | 'prize' | 'refund'
+export type TransactionType =
+  | 'purchase'
+  | 'entry'
+  | 'bonus'
+  | 'prize'
+  | 'refund'
+  /** 10% of an entry by someone you referred */
+  | 'referral'
+  /** A referral earning taken back because the purchase behind it was refunded */
+  | 'referral_reversal'
+  /** A correction made by an admin, approved by a second admin */
+  | 'adjustment'
 
 export interface Transaction {
   id: string
   type: TransactionType
   /** Signed Raffs movement: positive = in, negative = out */
   raffs: number
-  /** Naira amount where applicable (purchases, entry value), otherwise null */
+  /** Naira amount where applicable (demo purchases), otherwise null */
   naira: number | null
+  /** Telegram Stars paid, for purchases; otherwise null */
+  stars: number | null
   note: string
   createdAt: string
   status: 'completed' | 'failed'
+}
+
+/**
+ * The price of a Raff in Telegram Stars for one clock hour. Admins set a base;
+ * each hour moves 3% to 15% up or down from that base (never from the
+ * previous hour), so a quote stays within 85% to 115% of the base.
+ */
+export interface RateQuote {
+  id: string
+  starsPerRaff: number
+  /** Display only: about how many Naira one Raff is worth at this quote */
+  nairaPerRaff: number
+  /** Epoch ms when the quote became valid */
+  issuedAt: number
+  /** Epoch ms when it stops being valid */
+  expiresAt: number
+  source: 'demo' | 'live'
+}
+
+export interface ReferralSummary {
+  code: string
+  link: string
+  peopleReferred: number
+  /** Referred people who entered at least once this calendar month (Lagos time) */
+  activeThisMonth: number
+  lifetimeRaffs: number
+  monthRaffs: number
+}
+
+export interface ReferredPerson {
+  username: string
+  joinedAt: string
+  entries: number
+  /** Raffs you have earned from this person's entries */
+  raffsEarned: number
+}
+
+export interface ReferralEarning {
+  id: string
+  createdAt: string
+  username: string
+  raffleName: string
+  /** What their entry cost */
+  entryRaffs: number
+  /** Your 10% */
+  earnedRaffs: number
+}
+
+/** One page of a cursor-paginated list. nextCursor is null on the last page. */
+export interface Page<T> {
+  items: T[]
+  nextCursor: string | null
 }
 
 export interface DeliveryAddress {

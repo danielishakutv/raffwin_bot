@@ -68,6 +68,22 @@ export const contactPrefsBody = z.object({
   email: z.boolean(),
 })
 
+/** Entry cap per confirmation (section 8); per-raffle and daily caps are admin settings. */
+export const MAX_QTY_PER_ENTRY = 50
+
+export const enterRaffleBody = z.object({
+  raffleId: z.string().uuid(),
+  qty: z.number().int().min(1).max(MAX_QTY_PER_ENTRY, `At most ${MAX_QTY_PER_ENTRY} entries at a time`),
+  /** One per confirmation tap: a retry with the same key returns the same entry, never a second one */
+  idempotencyKey: z.string().uuid(),
+})
+
+export const cursorQuery = z.object({
+  cursor: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+})
+
 export type SignUpBody = z.infer<typeof signUpBody>
+export type EnterRaffleBody = z.infer<typeof enterRaffleBody>
 export type ProfilePatchBody = z.infer<typeof profilePatchBody>
 export type AddressBody = z.infer<typeof addressBody>

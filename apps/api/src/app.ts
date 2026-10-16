@@ -7,6 +7,7 @@ import { pinoHttp } from 'pino-http'
 import { sql } from 'drizzle-orm'
 import type { ApiErrorBody } from '@raffwin/shared'
 import pkg from '../package.json' with { type: 'json' }
+import { adminRoutes } from './admin/routes'
 import type { AppContext } from './context'
 import { errorHandler, notFound, requestMeta } from './http/middleware'
 import { v1Routes } from './http/routes'
@@ -67,6 +68,10 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Express {
   app.use('/v1', limiter(ctx, limits.global, 'global'))
   app.use('/v1/auth', limiter(ctx, limits.auth, 'auth'))
   app.use('/v1', v1Routes(ctx))
+
+  app.use('/admin/v1', limiter(ctx, limits.global, 'admin'))
+  app.use('/admin/v1/auth/login', limiter(ctx, limits.auth, 'admin_login'))
+  app.use('/admin/v1', adminRoutes(ctx))
 
   app.use(notFound)
   app.use(errorHandler(ctx))

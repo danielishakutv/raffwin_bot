@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Bell, ChevronRight, History, MapPin, Settings2, ShieldCheck, Ticket, Trophy, UserRound, Wrench } from 'lucide-react'
+import { Bell, ChevronRight, History, MapPin, Settings2, ShieldCheck, Ticket, Trophy, UserPlus, UserRound, Wrench } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { usingRealApi } from '@/api'
@@ -37,6 +37,7 @@ export function ProfilePage() {
     { to: '/profile/history', icon: History, label: 'Transaction history', count: transactions.length },
     { to: '/profile/entries', icon: Ticket, label: 'My entries', count: entries.reduce((s, e) => s + e.qty, 0) },
     { to: '/profile/wins', icon: Trophy, label: 'My wins', count: wins.length },
+    { to: '/referrals', icon: UserPlus, label: 'Invite friends, earn 10%', count: null },
   ]
 
   return (

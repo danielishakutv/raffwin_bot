@@ -1,38 +1,28 @@
 /**
- * Naira <-> Raffs rate service.
+ * The hourly Stars-per-Raff quote, as the UI sees it.
  *
- * This is THE one place that knows how Naira converts to Raffs. Every Raffs
- * figure in the UI is derived from a RateQuote through the helpers below;
- * nothing else in the app may hard-code a conversion.
+ * Entries are priced in fixed Raffs (raffle.entryPriceRaffs); the quote only
+ * prices buying Raffs, and gives the "about ₦…" display figures. The rule
+ * itself (3% to 15% up or down from the base, every clock hour) lives in
+ * @raffwin/shared so the demo and the API cannot disagree.
  *
- * Convention: the quote is expressed as **Naira per 1 Raff** (nairaPerRaff).
- *
- * A quote is valid for exactly one hour. The demo provider aligns quotes to
- * the clock hour and derives a deterministic +/-3-5% fluctuation around the
- * base rate from the hour index, so reloading the page inside the same hour
- * shows the same rate and the expiry countdown stays truthful.
- *
- * To plug in the real conversion table later, implement RateProvider against
- * the real endpoint and call setRateProvider(...) on boot.
+ * The real API supplies live quotes (GET /v1/rate). The demo provider derives
+ * the same kind of quote deterministically from the hour, so a reload inside
+ * the hour shows the same rate and the expiry countdown stays truthful.
  */
+import { hourlyQuote, hourStart, RATE_TTL_MS, roundRate, type RateQuote } from '@raffwin/shared'
 
-export interface RateQuote {
-  id: string
-  /** How many Naira one Raff costs for the life of this quote */
-  nairaPerRaff: number
-  /** Epoch ms when the quote became valid */
-  issuedAt: number
-  /** Epoch ms when the quote stops being valid (issuedAt + 1 hour) */
-  expiresAt: number
-  source: 'demo' | 'live'
-}
+export type { RateQuote }
+export { RATE_TTL_MS }
 
 export interface RateProvider {
   fetchRate(): Promise<RateQuote>
 }
 
-export const RATE_TTL_MS = 60 * 60 * 1000
-export const BASE_NAIRA_PER_RAFF = 10
+/** Demo base: 0.5 Star per Raff, and 1 Star shown as about ₦20, so 1 Raff is about ₦10. */
+export const DEMO_BASE_STARS_PER_RAFF = 0.5
+export const DEMO_NAIRA_PER_STAR = 20
+export const BASE_NAIRA_PER_RAFF = DEMO_BASE_STARS_PER_RAFF * DEMO_NAIRA_PER_STAR
 
 /* ----------------------------------------------------------------------------
  * Demo provider
@@ -47,13 +37,6 @@ function unitRandom(seed: number): number {
   return (x >>> 0) / 4294967296
 }
 
-/** +/- 3% to 5% fluctuation, sign and magnitude both derived from the seed. */
-function fluctuation(seed: number): number {
-  const magnitude = 0.03 + unitRandom(seed) * 0.02
-  const sign = unitRandom(seed * 7 + 1) < 0.5 ? -1 : 1
-  return sign * magnitude
-}
-
 /** Demo-only salt bumped by the "refresh rate" control so a new quote visibly differs. */
 let demoSalt = 0
 let demoWindowStart: number | null = null
@@ -63,18 +46,18 @@ export function bumpDemoRate(): void {
   demoWindowStart = Date.now()
 }
 
-/** Synchronous quote for a moment in time; used by the mock API to price entries server-side. */
+/** Synchronous demo quote for a moment in time. */
 export function demoQuoteAt(now: number = Date.now()): RateQuote {
-  const hourIndex = Math.floor(now / RATE_TTL_MS)
-  const windowStart = hourIndex * RATE_TTL_MS
-  const windowEnd = windowStart + RATE_TTL_MS
-  const issuedAt = demoWindowStart && demoWindowStart >= windowStart ? demoWindowStart : windowStart
-  const value = BASE_NAIRA_PER_RAFF * (1 + fluctuation(hourIndex * 31 + demoSalt * 101))
+  const windowStart = hourStart(now)
+  const hourIndex = windowStart / RATE_TTL_MS
+  const seed = hourIndex * 31 + demoSalt * 101
+  const { value } = hourlyQuote(DEMO_BASE_STARS_PER_RAFF, unitRandom(seed), unitRandom(seed * 7 + 1))
   return {
     id: `demo-${hourIndex}-${demoSalt}`,
-    nairaPerRaff: Math.round(value * 100) / 100,
-    issuedAt,
-    expiresAt: windowEnd,
+    starsPerRaff: value,
+    nairaPerRaff: roundRate(value * DEMO_NAIRA_PER_STAR),
+    issuedAt: demoWindowStart && demoWindowStart >= windowStart ? demoWindowStart : windowStart,
+    expiresAt: windowStart + RATE_TTL_MS,
     source: 'demo',
   }
 }
@@ -90,7 +73,6 @@ export const demoRateProvider: RateProvider = {
 
 let provider: RateProvider = demoRateProvider
 
-/** Swap in the real rate provider when the backend exists. */
 export function setRateProvider(next: RateProvider): void {
   provider = next
 }
@@ -100,24 +82,19 @@ export function getRateProvider(): RateProvider {
 }
 
 /* ----------------------------------------------------------------------------
- * Conversion helpers - the only legal way to turn Naira into Raffs
+ * Conversion helpers - the only legal way to turn Naira and Raffs into each other
  * -------------------------------------------------------------------------- */
 
 export function isRateValid(quote: RateQuote | null | undefined, now: number = Date.now()): quote is RateQuote {
   return !!quote && now >= quote.issuedAt && now < quote.expiresAt
 }
 
-/** Raffs received for a Naira amount (purchases round down in the house's favour). */
+/** Raffs received for a Naira amount (demo card purchases; rounds down in the house's favour). */
 export function nairaToRaffs(naira: number, quote: RateQuote): number {
   return Math.max(0, Math.floor(naira / quote.nairaPerRaff))
 }
 
-/** Raffs cost of one raffle entry priced in Naira (rounds up). */
-export function entryCostRaffs(entryPriceNaira: number, quote: RateQuote): number {
-  return Math.max(1, Math.ceil(entryPriceNaira / quote.nairaPerRaff))
-}
-
-/** Naira value of a Raffs amount at a given quote. */
+/** About how many Naira a Raffs amount is worth at a quote. Display only. */
 export function raffsToNaira(raffs: number, quote: RateQuote): number {
   return Math.round(raffs * quote.nairaPerRaff)
 }

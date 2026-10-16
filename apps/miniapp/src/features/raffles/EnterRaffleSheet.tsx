@@ -7,15 +7,13 @@ import { AnimatedNumber } from '@/components/ui/AnimatedNumber'
 import { BouncyButton } from '@/components/ui/BouncyButton'
 import { Stepper } from '@/components/ui/Field'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
-import { RateChip } from '@/components/ui/RateChip'
 import { Sheet } from '@/components/ui/Sheet'
-import { Spinner } from '@/components/ui/Spinner'
 import { useRate } from '@/hooks/useRate'
 import type { Raffle } from '@/data/types'
 import { burst } from '@/services/confetti'
 import { formatInt, formatNaira } from '@/services/format'
 import { haptics } from '@/services/haptics'
-import { entryCostRaffs } from '@/services/rates'
+import { raffsToNaira } from '@/services/rates'
 import { sound } from '@/services/sound'
 import { useAppStore } from '@/store/useAppStore'
 
@@ -36,7 +34,9 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
   const [qty, setQty] = useState(1)
   const [step, setStep] = useState<Step>('pick')
   const [error, setError] = useState<string | null>(null)
-  const [result, setResult] = useState<{ qty: number; raffs: number; entries: number } | null>(null)
+  // One key per confirmation: kept across a retry, replaced when the quantity changes or after success
+  const [attemptKey, setAttemptKey] = useState(() => crypto.randomUUID())
+  const [result, setResult] = useState<{ qty: number; raffs: number; entries: number; ticketFrom: number; ticketTo: number } | null>(null)
 
   useEffect(() => {
     if (open) {
@@ -44,25 +44,32 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
       setStep('pick')
       setError(null)
       setResult(null)
+      setAttemptKey(crypto.randomUUID())
     }
   }, [open, raffle?.id])
 
+  useEffect(() => {
+    setAttemptKey(crypto.randomUUID())
+  }, [qty])
+
   if (!raffle) return null
 
-  const unit = quote ? entryCostRaffs(raffle.entryPriceNaira, quote) : null
-  const totalRaffs = unit !== null ? unit * qty : null
-  const totalNaira = raffle.entryPriceNaira * qty
+  // Fixed price in Raffs; the hourly rate only gives the "about ₦" figure
+  const unit = raffle.entryPriceRaffs
+  const totalRaffs = unit * qty
+  const totalNaira = quote ? raffsToNaira(totalRaffs, quote) : null
   const remaining = Math.max(1, raffle.entriesTarget - raffle.entriesCount)
   const max = Math.min(50, remaining)
-  const shortBy = totalRaffs !== null ? Math.max(0, totalRaffs - balance) : 0
+  const shortBy = Math.max(0, totalRaffs - balance)
   const insufficient = shortBy > 0
 
   const confirm = async () => {
     setStep('processing')
     setError(null)
     try {
-      const res = await enterRaffle(raffle.id, qty)
-      setResult({ qty, raffs: res.entry.raffsSpent, entries: res.raffle.entriesCount })
+      const res = await enterRaffle(raffle.id, qty, attemptKey)
+      setAttemptKey(crypto.randomUUID())
+      setResult({ qty, raffs: res.entry.raffsSpent, entries: res.raffle.entriesCount, ticketFrom: res.entry.ticketFrom, ticketTo: res.entry.ticketTo })
       setStep('success')
       sound.play('chime')
       haptics.notify('success')
@@ -82,7 +89,7 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
           <motion.div key="pick" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="flex flex-col gap-5 pt-2">
             <div className="flex items-center justify-between">
               <p className="text-[13px] font-semibold text-mist">Price per entry</p>
-              <RateChip />
+              <p className="flex items-center gap-1.5 text-[15px] font-extrabold"><RaffsCoin size={16} /><span className="nums">{formatInt(unit)}</span> Raffs</p>
             </div>
             <div className="flex flex-col items-center gap-3 rounded-card bg-white/5 py-6">
               <p className="text-[13px] font-semibold text-mist">How many entries?</p>
@@ -91,11 +98,11 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
             </div>
             <div className="flex flex-col gap-2 rounded-card bg-white/5 p-4">
               <Row label="Entries" value={<span className="nums">{qty}</span>} />
-              <Row label="Price per entry" value={unit !== null ? <Raffs value={unit} /> : <Refreshing />} />
-              <Row label="Naira value" value={<span className="nums">{formatNaira(totalNaira)}</span>} />
+              <Row label="Price per entry" value={<Raffs value={unit} />} />
+              {totalNaira !== null && <Row label="About" value={<span className="nums">{formatNaira(totalNaira)}</span>} />}
               <div className="my-1 h-px bg-white/10" />
-              <Row label={<span className="font-bold text-cloud">Total</span>} value={totalRaffs !== null ? <Raffs value={totalRaffs} big /> : <Refreshing />} />
-              <Row label="My balance after" value={totalRaffs !== null ? <Raffs value={balance - totalRaffs} warn={insufficient} /> : <Refreshing />} />
+              <Row label={<span className="font-bold text-cloud">Total</span>} value={<Raffs value={totalRaffs} big />} />
+              <Row label="My balance after" value={<Raffs value={balance - totalRaffs} warn={insufficient} />} />
             </div>
             {error && <p className="text-[13px] font-medium text-coral">{error}</p>}
             {insufficient ? (
@@ -107,8 +114,8 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
                 </BouncyButton>
               </div>
             ) : (
-              <BouncyButton size="lg" block pulse disabled={totalRaffs === null} onClick={() => setStep('confirm')}>
-                {totalRaffs !== null ? `Continue with ${formatInt(totalRaffs)} Raffs` : 'Waiting for the rate'}
+              <BouncyButton size="lg" block pulse onClick={() => setStep('confirm')}>
+                {`Continue with ${formatInt(totalRaffs)} Raffs`}
               </BouncyButton>
             )}
           </motion.div>
@@ -121,8 +128,8 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
               <p className="mt-1 font-display text-[22px] font-extrabold leading-tight">{raffle.prizeName}</p>
               <p className="mt-3 text-[14px]">
                 <span className="nums font-extrabold">{qty}</span> {qty === 1 ? 'entry' : 'entries'} for{' '}
-                <span className="nums font-extrabold">{formatInt(totalRaffs ?? 0)} Raffs</span>{' '}
-                <span className="text-white/70">({formatNaira(totalNaira)})</span>
+                <span className="nums font-extrabold">{formatInt(totalRaffs)} Raffs</span>
+                {totalNaira !== null && <span className="text-white/70"> (about {formatNaira(totalNaira)})</span>}
               </p>
               <p className="mt-1 text-[12px] text-white/70">Entries are final once confirmed. The draw happens at the deadline.</p>
             </div>
@@ -143,7 +150,7 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
               <RaffsCoin size={56} />
             </motion.div>
             <p className="text-[15px] font-bold">Placing your {qty === 1 ? 'entry' : 'entries'}</p>
-            <p className="text-[13px] text-mist">Locking the price at the current rate</p>
+            <p className="text-[13px] text-mist">Assigning your ticket numbers</p>
           </motion.div>
         )}
 
@@ -154,7 +161,7 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
             </motion.div>
             <h3 className="text-[24px] font-bold">You are in the draw</h3>
             <p className="max-w-[30ch] text-[14px] text-mist">
-              {result.qty} {result.qty === 1 ? 'ticket' : 'tickets'} for the {raffle.prizeName}. We will tell you on Telegram the moment the draw happens.
+              {result.qty === 1 ? `Ticket #${result.ticketFrom}` : `Tickets #${result.ticketFrom} to #${result.ticketTo}`} for the {raffle.prizeName}. We will tell you on Telegram the moment the draw happens.
             </p>
             <div className="grid w-full grid-cols-2 gap-3">
               <div className="rounded-card bg-white/5 p-4">
@@ -207,10 +214,3 @@ function Raffs({ value, big, warn }: { value: number; big?: boolean; warn?: bool
   )
 }
 
-function Refreshing() {
-  return (
-    <span className="flex items-center gap-1.5 text-[12px] font-semibold text-mist">
-      <Spinner className="h-3 w-3" /> Refreshing rate
-    </span>
-  )
-}

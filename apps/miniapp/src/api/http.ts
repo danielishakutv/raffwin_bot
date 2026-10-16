@@ -5,6 +5,10 @@
  */
 import type {
   Bootstrap,
+  Page,
+  ReferralEarning,
+  ReferralSummary,
+  ReferredPerson,
   ContactPrefs,
   DeliveryAddress,
   Entry,
@@ -13,7 +17,7 @@ import type {
   SignUpInput,
   Transaction,
 } from '@/data/types'
-import { getRateProvider, type RateQuote } from '@/services/rates'
+import type { RateQuote } from '@/services/rates'
 import { ApiError } from './errors'
 import type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse } from './mock'
 import { call, clearSession } from './session'
@@ -93,25 +97,22 @@ export async function setVerificationStatus(): Promise<Profile> {
 
 /* Rates ---------------------------------------------------------------------- */
 
-/** Server-issued quotes arrive with raffles (milestone 2); until then this is the demo quote. */
 export function getRate(): Promise<RateQuote> {
-  return getRateProvider().fetchRate()
+  return call<RateQuote>('GET', '/v1/rate')
 }
 
 /* Raffles -------------------------------------------------------------------- */
 
-export async function getRaffles(): Promise<Raffle[]> {
-  return (await getBootstrap()).raffles
+export function getRaffles(): Promise<Raffle[]> {
+  return call<Raffle[]>('GET', '/v1/raffles')
 }
 
-export async function getRaffle(id: string): Promise<Raffle> {
-  const raffle = (await getRaffles()).find((r) => r.id === id)
-  if (!raffle) throw new ApiError('NOT_FOUND', 'That raffle no longer exists.')
-  return raffle
+export function getRaffle(id: string): Promise<Raffle> {
+  return call<Raffle>('GET', `/v1/raffles/${encodeURIComponent(id)}`)
 }
 
-export async function enterRaffle(): Promise<EnterRaffleResponse> {
-  return notYet('Entering raffles')
+export function enterRaffle(req: EnterRaffleRequest): Promise<EnterRaffleResponse> {
+  return call<EnterRaffleResponse>('POST', '/v1/entries', req)
 }
 
 export async function drawRaffle(): Promise<{ raffle: Raffle; balance: number; youWon: boolean }> {
@@ -124,10 +125,24 @@ export async function buyRaffs(): Promise<BuyRaffsResponse> {
   return notYet('Buying Raffs with Telegram Stars')
 }
 
-export async function getTransactions(): Promise<Transaction[]> {
-  return (await getBootstrap()).transactions
+export function getTransactions(): Promise<Transaction[]> {
+  return call<Transaction[]>('GET', '/v1/transactions')
 }
 
-export async function getEntries(): Promise<Entry[]> {
-  return (await getBootstrap()).entries
+export function getEntries(): Promise<Entry[]> {
+  return call<Entry[]>('GET', '/v1/entries')
+}
+
+/* Referrals ------------------------------------------------------------------ */
+
+export function getReferralSummary(): Promise<ReferralSummary> {
+  return call<ReferralSummary>('GET', '/v1/referrals/summary')
+}
+
+export function getReferredPeople(cursor?: string): Promise<Page<ReferredPerson>> {
+  return call('GET', `/v1/referrals/people${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`)
+}
+
+export function getReferralEarnings(cursor?: string): Promise<Page<ReferralEarning>> {
+  return call('GET', `/v1/referrals/earnings${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`)
 }

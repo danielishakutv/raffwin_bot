@@ -2,6 +2,44 @@ import { describe, expect, it } from 'vitest'
 import { isReferralCode, parseStartParam, referralEarning, REFERRAL_CODE_ALPHABET } from './referral'
 import { normalizeNigerianPhone } from './phone'
 import { profilePatchBody, signUpBody } from './schemas'
+import { hourlyQuote, hourStart, raffsForStars, RATE_TTL_MS } from './rate'
+
+describe('hourlyQuote', () => {
+  it('moves 3% to 15% from the base, in either direction', () => {
+    expect(hourlyQuote(0.5, 0, 0.9)).toEqual({ value: 0.515, move: 0.03 })
+    expect(hourlyQuote(0.5, 0, 0.1)).toEqual({ value: 0.485, move: -0.03 })
+    expect(hourlyQuote(0.5, 0.999999, 0.9).value).toBeCloseTo(0.575, 5)
+    expect(hourlyQuote(0.5, 0.999999, 0.1).value).toBeCloseTo(0.425, 5)
+  })
+  it('never leaves 85%-115% of the base, whatever the randomness', () => {
+    for (let i = 0; i < 2000; i += 1) {
+      const { value, move } = hourlyQuote(2, Math.random(), Math.random())
+      expect(Math.abs(move)).toBeGreaterThanOrEqual(0.03)
+      expect(Math.abs(move)).toBeLessThanOrEqual(0.15)
+      expect(value).toBeGreaterThanOrEqual(1.7)
+      expect(value).toBeLessThanOrEqual(2.3)
+    }
+  })
+  it('refuses a non-positive base', () => {
+    expect(() => hourlyQuote(0, 0.5, 0.5)).toThrow()
+  })
+})
+
+describe('raffsForStars', () => {
+  it('rounds down and survives float error', () => {
+    expect(raffsForStars(100, 0.5)).toBe(200)
+    expect(raffsForStars(100, 0.515)).toBe(194)
+    expect(raffsForStars(0, 0.5)).toBe(0)
+  })
+})
+
+describe('hourStart', () => {
+  it('aligns to the clock hour', () => {
+    const t = Date.UTC(2026, 9, 16, 13, 42, 7)
+    expect(hourStart(t)).toBe(Date.UTC(2026, 9, 16, 13))
+    expect(hourStart(t) + RATE_TTL_MS).toBe(Date.UTC(2026, 9, 16, 14))
+  })
+})
 
 describe('referralEarning', () => {
   it('pays 10% floored to a whole Raff', () => {

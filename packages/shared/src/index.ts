@@ -5,5 +5,6 @@
 export type * from './types'
 export * from './errors'
 export * from './phone'
+export * from './rate'
 export * from './referral'
 export * from './validation'

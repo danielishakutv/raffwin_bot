@@ -23,6 +23,10 @@ export const API_ERROR_CODES = [
   /** This Telegram account already has a Raffle Win account */
   'ALREADY_REGISTERED',
   'ACCOUNT_SUSPENDED',
+  /** Signed in, but this role may not do that */
+  'FORBIDDEN',
+  /** The action needs a second admin's approval and was queued instead */
+  'APPROVAL_REQUIRED',
   'INVALID_INPUT',
   'RATE_LIMITED',
   'SERVER_ERROR',

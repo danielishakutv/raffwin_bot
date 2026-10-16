@@ -34,3 +34,6 @@ export const drawRaffle = impl.drawRaffle
 export const buyRaffs = impl.buyRaffs
 export const getTransactions = impl.getTransactions
 export const getEntries = impl.getEntries
+export const getReferralSummary = impl.getReferralSummary
+export const getReferredPeople = impl.getReferredPeople
+export const getReferralEarnings = impl.getReferralEarnings

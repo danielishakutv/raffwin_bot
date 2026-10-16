@@ -52,7 +52,8 @@ export interface AppState {
   /** Demo control: expire the current quote so a new one is fetched. */
   expireRateNow: () => void
   refreshRaffles: () => Promise<void>
-  enterRaffle: (raffleId: string, qty: number) => Promise<api.EnterRaffleResponse>
+  /** idempotencyKey: one per confirmation, reused on retry, so a lost reply never makes a second entry */
+  enterRaffle: (raffleId: string, qty: number, idempotencyKey: string) => Promise<api.EnterRaffleResponse>
   drawRaffle: (raffleId: string) => Promise<{ raffle: Raffle; youWon: boolean }>
   buyRaffs: (req: Omit<api.BuyRaffsRequest, 'rateId'>) => Promise<api.BuyRaffsResponse>
   updateProfile: (patch: Partial<Pick<Profile, 'fullName' | 'phone' | 'email' | 'username'>>) => Promise<void>
@@ -146,10 +147,8 @@ export const useAppStore = create<AppState>()(
         set({ raffles })
       },
 
-      async enterRaffle(raffleId, qty) {
-        const { rate } = get()
-        if (!isRateValid(rate)) throw new Error('The rate is refreshing. One moment.')
-        const res = await api.enterRaffle({ raffleId, qty, rateId: rate.id })
+      async enterRaffle(raffleId, qty, idempotencyKey) {
+        const res = await api.enterRaffle({ raffleId, qty, idempotencyKey })
         set((s) => ({
           balance: res.balance,
           raffles: s.raffles.map((r) => (r.id === res.raffle.id ? res.raffle : r)),

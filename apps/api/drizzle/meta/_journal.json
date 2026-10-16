@@ -8,6 +8,20 @@
       "when": 1792133966328,
       "tag": "0000_m1_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792158859523,
+      "tag": "0001_m2_raffles_ledger_admin",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792158861602,
+      "tag": "0002_m2_append_only",
+      "breakpoints": true
     }
   ]
 }

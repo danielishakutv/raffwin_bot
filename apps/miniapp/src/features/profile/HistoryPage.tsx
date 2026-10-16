@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { ArrowDownLeft, ArrowUpRight, Gift, Receipt, Ticket, Trophy } from 'lucide-react'
+import { ArrowDownLeft, ArrowUpRight, Gift, Receipt, SlidersHorizontal, Ticket, Trophy, Undo2, UserPlus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { staggerContainer, popIn } from '@/components/motion'
@@ -20,6 +20,9 @@ const icons: Record<TransactionType, React.ElementType> = {
   bonus: Gift,
   prize: Trophy,
   refund: ArrowDownLeft,
+  referral: UserPlus,
+  referral_reversal: Undo2,
+  adjustment: SlidersHorizontal,
 }
 
 export function HistoryPage() {

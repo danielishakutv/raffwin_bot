@@ -77,18 +77,32 @@ function pick(from: string[], count: number, offset: number): string[] {
 /** Builds the raffle list relative to `now`. */
 export function seedRaffles(now: number): Raffle[] {
   const at = (ms: number) => new Date(now + ms).toISOString()
+  // Demo raffles are written in Naira (easier to read) and priced in fixed Raffs
+  // at the demo base of BASE_NAIRA_PER_RAFF, exactly like the real API prices them.
   const r = (
-    partial: Omit<Raffle, 'entriesTarget' | 'rules' | 'entrants' | 'winners'> & {
+    partial: Omit<Raffle, 'entriesTarget' | 'rules' | 'entrants' | 'winners' | 'entryPriceRaffs' | 'seedCommitment'> & {
+      entryPriceNaira: number
+      poolTargetNaira: number
       winners: [string, string, string]
       winnerNames?: [string | null, string | null, string | null]
       rules?: string[]
       entrantsOffset?: number
     },
   ): Raffle => {
-    const { winners, winnerNames = [null, null, null], rules = [], entrantsOffset = 0, ...rest } = partial
+    const {
+      winners,
+      winnerNames = [null, null, null],
+      rules = [],
+      entrantsOffset = 0,
+      entryPriceNaira,
+      poolTargetNaira,
+      ...rest
+    } = partial
     return {
       ...rest,
-      entriesTarget: Math.round(rest.poolTargetNaira / rest.entryPriceNaira),
+      entryPriceRaffs: Math.ceil(entryPriceNaira / BASE_NAIRA_PER_RAFF),
+      seedCommitment: null,
+      entriesTarget: Math.round(poolTargetNaira / entryPriceNaira),
       rules: [...rules, ...commonRules],
       entrants: pick(DEMO_ENTRANTS, 14, entrantsOffset),
       winners: [
@@ -281,27 +295,29 @@ export function seedHistoryForUser(profile: Profile, raffles: Raffle[], now: num
     type: 'bonus',
     raffs: 500,
     naira: null,
+    stars: null,
     note: 'Welcome bonus (demo seed)',
     createdAt: at(-10 * DAY),
     status: 'completed',
   })
 
   if (tecno) {
-    const cost = Math.ceil(tecno.entryPriceNaira / BASE_NAIRA_PER_RAFF)
+    const cost = tecno.entryPriceRaffs
     entries.push({
       id: 'en-seed-tecno',
       raffleId: tecno.id,
       qty: 1,
       raffsSpent: cost,
-      nairaValue: tecno.entryPriceNaira,
-      rateId: 'demo-seed',
+      ticketFrom: tecno.entriesCount,
+      ticketTo: tecno.entriesCount,
       createdAt: at(-10 * DAY + 2 * HOUR),
     })
     transactions.push({
       id: 'tx-seed-tecno-entry',
       type: 'entry',
       raffs: -cost,
-      naira: tecno.entryPriceNaira,
+      naira: null,
+      stars: null,
       note: `Entry: ${tecno.prizeName} x1 (demo seed)`,
       createdAt: at(-10 * DAY + 2 * HOUR),
       status: 'completed',
@@ -313,6 +329,7 @@ export function seedHistoryForUser(profile: Profile, raffles: Raffle[], now: num
       type: 'prize',
       raffs: 1000,
       naira: null,
+      stars: null,
       note: `3rd place prize: ${tecno.prizeName} raffle (demo seed)`,
       createdAt: tecno.drawnAt ?? at(-9 * DAY),
       status: 'completed',
@@ -320,21 +337,22 @@ export function seedHistoryForUser(profile: Profile, raffles: Raffle[], now: num
   }
 
   if (infinix) {
-    const cost = Math.ceil(infinix.entryPriceNaira / BASE_NAIRA_PER_RAFF)
+    const cost = infinix.entryPriceRaffs
     entries.push({
       id: 'en-seed-infinix',
       raffleId: infinix.id,
       qty: 2,
       raffsSpent: cost * 2,
-      nairaValue: infinix.entryPriceNaira * 2,
-      rateId: 'demo-seed',
+      ticketFrom: infinix.entriesCount - 1,
+      ticketTo: infinix.entriesCount,
       createdAt: at(-1 * DAY),
     })
     transactions.push({
       id: 'tx-seed-infinix-entry',
       type: 'entry',
       raffs: -cost * 2,
-      naira: infinix.entryPriceNaira * 2,
+      naira: null,
+      stars: null,
       note: `Entry: ${infinix.prizeName} x2 (demo seed)`,
       createdAt: at(-1 * DAY),
       status: 'completed',

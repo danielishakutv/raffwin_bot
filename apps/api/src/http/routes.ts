@@ -3,9 +3,12 @@
  * call a service, return the shared shape. Errors go to errorHandler.
  */
 import { Router } from 'express'
+import { z } from 'zod'
 import {
   addressBody,
   contactPrefsBody,
+  cursorQuery,
+  enterRaffleBody,
   profilePatchBody,
   refreshBody,
   signUpBody,
@@ -15,8 +18,14 @@ import {
 import { validateUsername } from '@raffwin/shared'
 import type { Request } from 'express'
 import type { AppContext } from '../context'
+import { HttpError } from '../lib/http-error'
 import * as account from '../services/account'
 import * as auth from '../services/auth'
+import * as entryService from '../services/entries'
+import { recentTransactions } from '../services/ledger'
+import * as raffles from '../services/raffles'
+import { currentQuote, toRateQuote } from '../services/rates'
+import * as referrals from '../services/referrals'
 import { authOf, requestMeta, requireAuth } from './middleware'
 
 export function v1Routes(ctx: AppContext): Router {
@@ -80,6 +89,48 @@ export function v1Routes(ctx: AppContext): Router {
 
   router.put('/profile/contact-prefs', authed, async (req, res) => {
     res.json(await account.updateContactPrefs(ctx, me(req), contactPrefsBody.parse(req.body)))
+  })
+
+  /* Rate, raffles, entries, wallet history -------------------------------- */
+
+  router.get('/rate', authed, async (_req, res) => {
+    res.json(toRateQuote(await currentQuote(ctx.db, ctx.now())))
+  })
+
+  router.get('/raffles', authed, async (req, res) => {
+    res.json(await raffles.listForPlayer(ctx.db, me(req).id, ctx.now()))
+  })
+
+  router.get('/raffles/:id', authed, async (req, res) => {
+    const id = z.string().uuid().safeParse(req.params.id)
+    if (!id.success) throw new HttpError('NOT_FOUND', 'That raffle no longer exists.')
+    res.json(await raffles.getForPlayer(ctx.db, id.data))
+  })
+
+  router.post('/entries', authed, async (req, res) => {
+    res.status(201).json(await entryService.enterRaffle(ctx, me(req), enterRaffleBody.parse(req.body)))
+  })
+
+  router.get('/entries', authed, async (req, res) => {
+    res.json(await raffles.entriesForPlayer(ctx.db, me(req).id))
+  })
+
+  router.get('/transactions', authed, async (req, res) => {
+    res.json(await recentTransactions(ctx.db, me(req).id))
+  })
+
+  /* Referrals ------------------------------------------------------------- */
+
+  router.get('/referrals/summary', authed, async (req, res) => {
+    res.json(await referrals.summary(ctx, me(req)))
+  })
+
+  router.get('/referrals/people', authed, async (req, res) => {
+    res.json(await referrals.people(ctx, me(req), cursorQuery.parse(req.query)))
+  })
+
+  router.get('/referrals/earnings', authed, async (req, res) => {
+    res.json(await referrals.earnings(ctx, me(req), cursorQuery.parse(req.query)))
   })
 
   return router

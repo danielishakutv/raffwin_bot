@@ -12,6 +12,8 @@ import { addresses, users, type AddressRow, type UserRow } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
 import { readSharedContact, verifyTelegramData } from '../lib/telegram-auth'
+import { recentTransactions } from './ledger'
+import { entriesForPlayer, listForPlayer } from './raffles'
 
 /** A contact share is fresh when it was made within this window. */
 const CONTACT_PROOF_MAX_AGE_SECONDS = 60 * 60
@@ -54,14 +56,18 @@ function requireSignedUp(user: UserRow): void {
 
 export async function bootstrap(ctx: AppContext, user: UserRow): Promise<Bootstrap> {
   const profile = toProfile(user, await loadAddress(ctx, user.id))
+  const [raffleList, entryList, transactions] = await Promise.all([
+    listForPlayer(ctx.db, user.id, ctx.now()),
+    entriesForPlayer(ctx.db, user.id),
+    recentTransactions(ctx.db, user.id),
+  ])
   return {
     profile,
     onboardingComplete: profile !== null && user.onboardingCompletedAt !== null,
     balance: user.balanceCache,
-    // Raffles, entries and the ledger arrive in milestone 2
-    raffles: [],
-    entries: [],
-    transactions: [],
+    raffles: raffleList,
+    entries: entryList,
+    transactions,
   }
 }
 

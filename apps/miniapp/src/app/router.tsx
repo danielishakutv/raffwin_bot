@@ -11,6 +11,7 @@ import { ProfilePage } from '@/features/profile/ProfilePage'
 import { HistoryPage } from '@/features/profile/HistoryPage'
 import { EntriesPage } from '@/features/profile/EntriesPage'
 import { WinsPage } from '@/features/profile/WinsPage'
+import { ReferralsPage } from '@/features/referrals/ReferralsPage'
 
 /**
  * Routes (hash-based, see App.tsx):
@@ -25,6 +26,7 @@ import { WinsPage } from '@/features/profile/WinsPage'
  *  /profile/history   transaction history
  *  /profile/entries   my entries
  *  /profile/wins      my wins
+ *  /referrals         invite link, referred people, 10% earnings
  */
 export function AppRoutes() {
   return (
@@ -54,6 +56,7 @@ export function AppRoutes() {
         <Route path="/profile/history" element={<HistoryPage />} />
         <Route path="/profile/entries" element={<EntriesPage />} />
         <Route path="/profile/wins" element={<WinsPage />} />
+        <Route path="/referrals" element={<ReferralsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

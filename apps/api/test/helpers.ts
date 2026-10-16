@@ -9,13 +9,18 @@ import { AccessTokens } from '../src/lib/access-token'
 import { signTelegramData } from '../src/lib/telegram-auth'
 
 export const BOT_TOKEN = '1234567890:TEST-token-for-signing-initdata-only'
+/** 32 zero bytes, base64url: only ever used to encrypt test TOTP secrets */
+export const TEST_ADMIN_DATA_KEY = Buffer.alloc(32).toString('base64url')
 
-/** A controllable clock: tests move time instead of sleeping. */
+/**
+ * Real time plus an offset: tests move time instead of sleeping. (A frozen
+ * clock would disagree with data the tests build from Date.now().)
+ */
 export class Clock {
-  constructor(public ms = Date.now()) {}
-  now = () => this.ms
+  private offsetMs = 0
+  now = () => Date.now() + this.offsetMs
   advance(seconds: number) {
-    this.ms += seconds * 1000
+    this.offsetMs += seconds * 1000
   }
 }
 
@@ -29,6 +34,7 @@ export function testApp(overrides: Partial<Record<keyof Config, string>> = {}) {
     BOT_USERNAME: 'raffwin_test_bot',
     JWT_SECRET: 'x'.repeat(48),
     IP_HASH_SALT: 'test-salt-test-salt',
+    ADMIN_DATA_KEY: TEST_ADMIN_DATA_KEY,
     ...overrides,
   })
   const clock = new Clock()

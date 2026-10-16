@@ -169,3 +169,284 @@ export const securityEvents = pgTable(
 export type UserRow = typeof users.$inferSelect
 export type SessionRow = typeof sessions.$inferSelect
 export type AddressRow = typeof addresses.$inferSelect
+
+/* ============================================================================
+ * Milestone 2: settings, rates, raffles, entries, ledger, referrals, admin
+ * ========================================================================== */
+
+/** Remote config and feature flags, edited from the admin (the rate base needs approval). */
+export const settings = pgTable('settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  updatedByAdminId: uuid('updated_by_admin_id'),
+  updatedAt: updatedAt(),
+})
+
+/**
+ * One quote per clock hour, issued on first use by whoever asks first (the
+ * unique hour_start makes concurrent issuers agree). Rates are integers in
+ * millionths of a Star per Raff, so no float ever touches money.
+ */
+export const rateQuotes = pgTable(
+  'rate_quotes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    hourStart: timestamp('hour_start', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    starsPerRaffMicro: integer('stars_per_raff_micro').notNull(),
+    baseStarsPerRaffMicro: integer('base_stars_per_raff_micro').notNull(),
+    /** Signed move from the base in millionths, e.g. -84000 = -8.4% */
+    moveMicro: integer('move_micro').notNull(),
+    /** Display only */
+    nairaPerRaffKobo: integer('naira_per_raff_kobo').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('rate_quotes_hour_start_key').on(t.hourStart)],
+)
+
+export const RAFFLE_KINDS = ['phone', 'laptop', 'tv', 'earbuds', 'powerbank', 'voucher', 'console'] as const
+
+export const raffles = pgTable(
+  'raffles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    slug: text('slug').notNull(),
+    prizeName: text('prize_name').notNull(),
+    model: text('model').notNull().default(''),
+    category: text('category').notNull(),
+    kind: text('kind', { enum: RAFFLE_KINDS }).notNull(),
+    hue: integer('hue').notNull().default(260),
+    marketPriceNaira: integer('market_price_naira').notNull(),
+    /** Fixed once the raffle opens */
+    entryPriceRaffs: integer('entry_price_raffs').notNull(),
+    entriesTarget: integer('entries_target').notNull(),
+    /** Maintained inside the entry transaction, under the raffle's row lock */
+    entriesCount: integer('entries_count').notNull().default(0),
+    deadline: timestamp('deadline', { withTimezone: true }).notNull(),
+    status: text('status', { enum: ['draft', 'open', 'drawing', 'drawn', 'cancelled'] }).notNull().default('draft'),
+    description: text('description').notNull().default(''),
+    rules: jsonb('rules').$type<string[]>().notNull().default([]),
+    /** sha256 of the secret seed, published when the raffle opens (milestone 4) */
+    seedCommitment: text('seed_commitment'),
+    openedAt: timestamp('opened_at', { withTimezone: true }),
+    drawnAt: timestamp('drawn_at', { withTimezone: true }),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    createdByAdminId: uuid('created_by_admin_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('raffles_slug_key').on(t.slug), index('raffles_status_deadline_idx').on(t.status, t.deadline)],
+)
+
+export const rafflePrizes = pgTable(
+  'raffle_prizes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    raffleId: uuid('raffle_id')
+      .notNull()
+      .references(() => raffles.id),
+    position: integer('position').notNull(),
+    prizeItem: text('prize_item').notNull(),
+    prizeType: text('prize_type', { enum: ['physical', 'raffs_credit'] }).notNull(),
+    /** For raffs_credit prizes: credited to the winner by the draw */
+    raffsValue: integer('raffs_value').notNull().default(0),
+    winnerUserId: uuid('winner_user_id').references(() => users.id),
+    winnerTicket: integer('winner_ticket'),
+    fulfilmentStatus: text('fulfilment_status', {
+      enum: ['pending', 'contacted', 'confirmed', 'dispatched', 'delivered', 'forfeited'],
+    }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('raffle_prizes_position_key').on(t.raffleId, t.position)],
+)
+
+export const entries = pgTable(
+  'entries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    raffleId: uuid('raffle_id')
+      .notNull()
+      .references(() => raffles.id),
+    qty: integer('qty').notNull(),
+    raffsSpent: integer('raffs_spent').notNull(),
+    /** Contiguous, assigned under the raffle's row lock; inclusive */
+    ticketFrom: integer('ticket_from').notNull(),
+    ticketTo: integer('ticket_to').notNull(),
+    idempotencyKey: uuid('idempotency_key').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('entries_idempotency_key').on(t.userId, t.idempotencyKey),
+    uniqueIndex('entries_ticket_from_key').on(t.raffleId, t.ticketFrom),
+    index('entries_user_idx').on(t.userId, t.createdAt),
+    index('entries_raffle_idx').on(t.raffleId, t.createdAt),
+  ],
+)
+
+export const LEDGER_TYPES = [
+  'purchase',
+  'entry',
+  'bonus',
+  'prize',
+  'refund',
+  'referral',
+  'referral_reversal',
+  'adjustment',
+] as const
+
+/**
+ * Every Raffs movement. Insert-only; a user's balance is SUM(raffs), and
+ * users.balance_cache is kept equal to it in the same transaction.
+ */
+export const ledger = pgTable(
+  'ledger',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    type: text('type', { enum: LEDGER_TYPES }).notNull(),
+    raffs: integer('raffs').notNull(),
+    stars: integer('stars'),
+    referenceType: text('reference_type'),
+    referenceId: uuid('reference_id'),
+    note: text('note').notNull(),
+    /** Balance after this row, for statements and the nightly integrity check */
+    balanceAfter: integer('balance_after').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('ledger_user_idx').on(t.userId, t.createdAt),
+    index('ledger_reference_idx').on(t.referenceType, t.referenceId),
+  ],
+)
+
+export const referralEarnings = pgTable(
+  'referral_earnings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    referrerUserId: uuid('referrer_user_id')
+      .notNull()
+      .references(() => users.id),
+    referredUserId: uuid('referred_user_id')
+      .notNull()
+      .references(() => users.id),
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => entries.id),
+    raffs: integer('raffs').notNull(),
+    ledgerId: uuid('ledger_id')
+      .notNull()
+      .references(() => ledger.id),
+    reversedAt: timestamp('reversed_at', { withTimezone: true }),
+    reversalLedgerId: uuid('reversal_ledger_id').references(() => ledger.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('referral_earnings_entry_key').on(t.entryId),
+    index('referral_earnings_referrer_idx').on(t.referrerUserId, t.createdAt),
+  ],
+)
+
+/* Admin ------------------------------------------------------------------- */
+
+export const ADMIN_ROLES = ['super_admin', 'raffle_manager', 'finance', 'support', 'viewer'] as const
+export type AdminRole = (typeof ADMIN_ROLES)[number]
+
+export const adminUsers = pgTable(
+  'admin_users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Stored lower-case */
+    email: text('email').notNull(),
+    name: text('name').notNull(),
+    passwordHash: text('password_hash').notNull(),
+    /** AES-256-GCM with ADMIN_DATA_KEY */
+    totpSecretEnc: text('totp_secret_enc').notNull(),
+    /** Last accepted TOTP time step, so one code cannot be used twice */
+    totpLastStep: bigint('totp_last_step', { mode: 'number' }),
+    role: text('role', { enum: ADMIN_ROLES }).notNull(),
+    status: text('status', { enum: ['active', 'disabled'] }).notNull().default('active'),
+    failedLogins: integer('failed_logins').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('admin_users_email_key').on(t.email)],
+)
+
+export const adminSessions = pgTable(
+  'admin_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    adminId: uuid('admin_id')
+      .notNull()
+      .references(() => adminUsers.id),
+    tokenHash: text('token_hash').notNull(),
+    ipHash: text('ip_hash'),
+    userAgent: text('user_agent'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('admin_sessions_token_key').on(t.tokenHash), index('admin_sessions_admin_idx').on(t.adminId)],
+)
+
+/**
+ * Tamper-evident log of every admin action: each row's hash covers its own
+ * content and the previous row's hash, so editing or removing any row breaks
+ * the chain from that point on. Insert-only.
+ */
+export const auditLog = pgTable(
+  'audit_log',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    adminId: uuid('admin_id'),
+    action: text('action').notNull(),
+    targetType: text('target_type'),
+    targetId: text('target_id'),
+    before: jsonb('before'),
+    after: jsonb('after'),
+    ipHash: text('ip_hash'),
+    prevHash: text('prev_hash').notNull(),
+    hash: text('hash').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [uniqueIndex('audit_log_seq_key').on(t.seq), index('audit_log_target_idx').on(t.targetType, t.targetId)],
+)
+
+export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel'] as const
+
+/** Maker-checker: a sensitive action runs only when a second admin approves it. */
+export const approvals = pgTable(
+  'approvals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    action: text('action', { enum: APPROVAL_ACTIONS }).notNull(),
+    payload: jsonb('payload').notNull(),
+    reason: text('reason').notNull(),
+    status: text('status', { enum: ['pending', 'approved', 'rejected', 'failed'] }).notNull().default('pending'),
+    requestedByAdminId: uuid('requested_by_admin_id')
+      .notNull()
+      .references(() => adminUsers.id),
+    decidedByAdminId: uuid('decided_by_admin_id').references(() => adminUsers.id),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    /** What executing it produced, or why it failed */
+    result: jsonb('result'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('approvals_status_idx').on(t.status, t.createdAt)],
+)
+
+export type RaffleRow = typeof raffles.$inferSelect
+export type RafflePrizeRow = typeof rafflePrizes.$inferSelect
+export type EntryRow = typeof entries.$inferSelect
+export type LedgerRow = typeof ledger.$inferSelect
+export type AdminUserRow = typeof adminUsers.$inferSelect

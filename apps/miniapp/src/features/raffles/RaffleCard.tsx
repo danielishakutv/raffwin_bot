@@ -11,8 +11,8 @@ import { useNow } from '@/hooks/useNow'
 import { useRate } from '@/hooks/useRate'
 import { getRaffleStatus, isUrgent, STATUS_LABEL } from '@/data/raffleStatus'
 import type { Raffle } from '@/data/types'
-import { formatDate, formatInt, formatNaira } from '@/services/format'
-import { entryCostRaffs } from '@/services/rates'
+import { formatDate, formatInt, formatNaira, formatRaffs } from '@/services/format'
+import { raffsToNaira } from '@/services/rates'
 
 interface RaffleCardProps {
   raffle: Raffle
@@ -27,7 +27,9 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
   const status = getRaffleStatus(raffle, now)
   const urgent = isUrgent(raffle, now)
   const progress = raffle.entriesCount / raffle.entriesTarget
-  const cost = quote ? entryCostRaffs(raffle.entryPriceNaira, quote) : null
+  // Fixed price in Raffs; the quote only gives the "about ₦" hint
+  const cost = raffle.entryPriceRaffs
+  const costNaira = quote ? raffsToNaira(cost, quote) : null
   const live = status === 'open' || status === 'closing_soon'
 
   const statusTone = { open: 'mint', closing_soon: 'magenta', drawing: 'sun', drawn: 'neutral' } as const
@@ -110,7 +112,7 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
             <div className="flex items-end justify-between gap-2">
               <div>
                 <p className="text-[12px] font-semibold text-mist">Entry pool</p>
-                <p className="nums text-[18px] font-extrabold">{formatNaira(raffle.poolTargetNaira)}</p>
+                <p className="nums text-[18px] font-extrabold">{formatRaffs(raffle.entriesTarget * raffle.entryPriceRaffs)}</p>
               </div>
               <p className="flex items-center gap-1 text-[12px] font-semibold text-mist">
                 <Users size={14} />
@@ -121,17 +123,13 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
             <div className="mt-4 grid grid-cols-2 gap-3">
               <div className="rounded-2xl bg-white/5 p-3">
                 <p className="text-[11px] font-semibold text-mist">Entry cost</p>
-                {cost !== null ? (
-                  <p className="mt-1 flex items-center gap-1.5 text-[16px] font-extrabold">
-                    <RaffsCoin size={16} />
-                    <span className="nums">{formatInt(cost)}</span>
-                    <span className="text-[11px] font-semibold text-haze">({formatNaira(raffle.entryPriceNaira)})</span>
-                  </p>
-                ) : (
-                  <p className="mt-1 flex items-center gap-1.5 text-[12px] font-semibold text-mist">
-                    <Spinner className="h-3 w-3" /> Refreshing rate
-                  </p>
-                )}
+                <p className="mt-1 flex items-center gap-1.5 text-[16px] font-extrabold">
+                  <RaffsCoin size={16} />
+                  <span className="nums">{formatInt(cost)}</span>
+                  {costNaira !== null && (
+                    <span className="text-[11px] font-semibold text-haze">(about {formatNaira(costNaira)})</span>
+                  )}
+                </p>
               </div>
               <div className={cn('rounded-2xl p-3', urgent ? 'bg-magenta/15' : 'bg-white/5')}>
                 <p className="flex items-center gap-1 text-[11px] font-semibold text-mist">
