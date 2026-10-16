@@ -36,30 +36,53 @@ jobs:
           path: staging
         continue-on-error: true
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
+      # Each branch is built with its own layout: the pnpm workspace
+      # (apps/miniapp) once merged, the original single npm package before.
+      # The output is copied to <branch>/out so the assemble step needs no branching.
       - name: Build production from main
         working-directory: main
         run: |
-          npm ci
-          npm run build
-          cp dist/index.html dist/404.html
+          if [ -f pnpm-workspace.yaml ]; then
+            pnpm install --frozen-lockfile
+            pnpm --filter @raffwin/miniapp build
+            out=apps/miniapp/dist
+          else
+            npm ci
+            npm run build
+            out=dist
+          fi
+          cp "$out/index.html" "$out/404.html"
+          mkdir -p out && cp -r "$out/." out/
 
       - name: Build staging from staging branch
         if: hashFiles('staging/package.json') != ''
         working-directory: staging
         run: |
-          npm ci
-          npm run build:staging
-          cp dist/index.html dist/404.html
+          if [ -f pnpm-workspace.yaml ]; then
+            pnpm install --frozen-lockfile
+            pnpm --filter @raffwin/miniapp build:staging
+            out=apps/miniapp/dist
+          else
+            npm ci
+            npm run build:staging
+            out=dist
+          fi
+          cp "$out/index.html" "$out/404.html"
+          mkdir -p out && cp -r "$out/." out/
 
       - name: Assemble site
         run: |
           mkdir -p site
-          cp -r main/dist/. site/
-          if [ -d staging/dist ]; then mkdir -p site/staging && cp -r staging/dist/. site/staging/; fi
+          cp -r main/out/. site/
+          if [ -d staging/out ]; then mkdir -p site/staging && cp -r staging/out/. site/staging/; fi
           touch site/.nojekyll
           ls -R site | head -40
 

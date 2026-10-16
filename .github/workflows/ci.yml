@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, staging]
+    branches: [main, staging, 'm*-*']
   pull_request:
     branches: [main, staging]
 
@@ -11,22 +11,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  app:
-    name: Mini App (typecheck, lint, build)
+  workspace:
+    name: Mini App, API, shared (typecheck, lint, test, build)
     runs-on: ubuntu-latest
+    services:
+      # Production runs PostgreSQL 14 on the jmnews server; test against the same major
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: raffwin
+          POSTGRES_PASSWORD: raffwin
+          POSTGRES_DB: raffwin_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U raffwin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://raffwin:raffwin@localhost:5432/raffwin_test
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
       - name: Build (production env)
-        run: npm run build
-      - name: Build (staging env)
-        run: npm run build:staging
+        run: pnpm build
+      - name: Build Mini App (staging env)
+        run: pnpm --filter @raffwin/miniapp build:staging
 
   bot:
     name: Bot (typecheck, build)
