@@ -134,6 +134,10 @@ export function adminRoutes(ctx: AppContext): Router {
     const { reason } = reasonBody.parse(req.body)
     res.json(await ops.setUserStatus(ctx, adminId(req), idParam(req), 'active', reason))
   })
+  r.post('/users/:id/referrer', authed, perm('users.referrer.assign'), async (req, res) => {
+    const body = reasonBody.extend({ referrer: z.string().trim().min(2).max(40) }).parse(req.body)
+    res.json(await ops.assignReferrer(ctx, adminId(req), idParam(req), body))
+  })
   r.post('/users/:id/adjust', authed, perm('users.adjust.request'), async (req, res) => {
     const body = adjustmentBody.parse(req.body)
     const id = idParam(req)

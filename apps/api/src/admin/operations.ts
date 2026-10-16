@@ -35,6 +35,7 @@ import { HttpError } from '../lib/http-error'
 import { currentQuote } from '../services/rates'
 import { getAllSettings, putSetting } from '../services/settings'
 import { appendAudit } from './audit'
+import { recordSecurityEvent } from '../lib/security-events'
 
 /* Raffles -------------------------------------------------------------------- */
 
@@ -256,6 +257,62 @@ export async function userDetail(ctx: AppContext, id: string): Promise<AdminUser
     })),
     referrals: { people: ref?.people ?? 0, raffsEarned: ref?.earned ?? 0 },
   }
+}
+
+/**
+ * Attaches a referrer to an account that has none, chosen by username or
+ * Telegram id. The referrer earns 10% on this account's entries from now on;
+ * earlier entries are not paid back-dated. An existing bond is never replaced
+ * (nobody can take someone else's referrals), an account cannot refer itself,
+ * and two accounts cannot refer each other. Audited and flagged for review.
+ */
+export async function assignReferrer(
+  ctx: AppContext,
+  adminId: string,
+  userId: string,
+  body: { referrer: string; reason: string },
+): Promise<AdminUserDetail> {
+  const handle = body.referrer.trim().replace(/^@/, '').toLowerCase()
+  const byTelegramId = /^[0-9]{5,15}$/.test(handle)
+  await ctx.db.transaction(async (tx) => {
+    const [target] = await tx.select().from(users).where(eq(users.id, userId)).for('update')
+    if (!target) throw new HttpError('NOT_FOUND', 'No such player.')
+    if (target.referredByUserId) {
+      throw new HttpError('INVALID_INPUT', 'This player already has a referrer; it cannot be changed.', { referrer: 'Already set' })
+    }
+    const [referrer] = await tx
+      .select()
+      .from(users)
+      .where(byTelegramId ? eq(users.telegramId, Number(handle)) : eq(users.username, handle))
+    if (!referrer) throw new HttpError('INVALID_INPUT', `No player ${byTelegramId ? 'with Telegram id' : 'called @'}${handle}.`, { referrer: 'Not found' })
+    if (referrer.id === target.id) throw new HttpError('INVALID_INPUT', 'A player cannot refer themselves.', { referrer: 'Same player' })
+    if (referrer.referredByUserId === target.id) {
+      throw new HttpError('INVALID_INPUT', `@${referrer.username} was referred by this player; two players cannot refer each other.`, { referrer: 'Would loop' })
+    }
+    if (referrer.status !== 'active') throw new HttpError('INVALID_INPUT', `@${referrer.username} is ${referrer.status}.`, { referrer: 'Not active' })
+    await tx
+      .update(users)
+      .set({ referredByUserId: referrer.id, referredAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(eq(users.id, target.id), sql`${users.referredByUserId} is null`))
+    await appendAudit(tx, {
+      adminId,
+      action: 'user.referrer.assign',
+      targetType: 'user',
+      targetId: target.id,
+      before: { referredByUserId: null },
+      after: { referredByUserId: referrer.id, referrerUsername: referrer.username, reason: body.reason },
+    })
+  })
+  await recordSecurityEvent(ctx.db, ctx.log, {
+    severity: 'medium',
+    category: 'fraud',
+    kind: 'referrer_assigned_by_admin',
+    ipHash: null,
+    route: 'POST /admin/v1/users/:id/referrer',
+    userId,
+    details: { adminId, referrer: handle, reason: body.reason },
+  })
+  return userDetail(ctx, userId)
 }
 
 /** Suspending also ends every session, so the player is out immediately. */

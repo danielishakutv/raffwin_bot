@@ -13,6 +13,8 @@ export const PERMISSIONS = [
   'users.read',
   'users.suspend',
   'users.adjust.request',
+  /** Attach a referrer to an account that has none (super_admin only) */
+  'users.referrer.assign',
   'settings.read',
   'settings.limits.write',
   'settings.rate.request',

@@ -311,6 +311,61 @@ describe('user management', () => {
   })
 })
 
+describe('assigning a referrer', () => {
+  it('attaches a referrer to an account without one; later entries pay them 10%', async () => {
+    const boss = await makeAdmin('super_admin')
+    const referrer = await member(http)
+    const friend = await member(http)
+    await credit(db, friend.userId, 1000)
+    const raffle = await createRaffle(db, { entryPriceRaffs: 100 })
+    // An entry before the assignment pays nobody
+    await friend.post('/v1/entries', { raffleId: raffle.id, qty: 1, idempotencyKey: randomUUID() })
+
+    const res = await write(boss, `/admin/v1/users/${friend.userId}/referrer`, { referrer: `@${referrer.username}`, reason: 'Invited before the app existed' })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(res.body.user.referredByUsername).toBe(referrer.username)
+    expect((await referrer.get('/v1/bootstrap')).body.balance).toBe(0)
+
+    await friend.post('/v1/entries', { raffleId: raffle.id, qty: 2, idempotencyKey: randomUUID() })
+    expect((await referrer.get('/v1/bootstrap')).body.balance).toBe(20)
+
+    const audit = await db.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where action = 'user.referrer.assign' and target_id = ${friend.userId}`)
+    expect(audit.rows[0]?.n).toBe(1)
+  })
+
+  it('finds the referrer by Telegram id too', async () => {
+    const boss = await makeAdmin('super_admin')
+    const referrer = await member(http)
+    const friend = await member(http)
+    const res = await write(boss, `/admin/v1/users/${friend.userId}/referrer`, { referrer: String(referrer.telegramId), reason: 'by telegram id' })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(res.body.user.referredByUsername).toBe(referrer.username)
+  })
+
+  it('never replaces an existing referrer, and refuses self, loops and unknown players', async () => {
+    const boss = await makeAdmin('super_admin')
+    const a = await member(http)
+    const b = await member(http, { startParam: `ref_${a.referralCode}` })
+    const c = await member(http)
+    const already = await write(boss, `/admin/v1/users/${b.userId}/referrer`, { referrer: c.username, reason: 'try to steal' })
+    expect(already.status).toBe(400)
+    expect(already.body.error.message).toMatch(/already has a referrer/)
+    expect((await write(boss, `/admin/v1/users/${c.userId}/referrer`, { referrer: c.username, reason: 'self referral' })).status).toBe(400)
+    // a referred b; making b the referrer of a would loop
+    const loop = await write(boss, `/admin/v1/users/${a.userId}/referrer`, { referrer: b.username, reason: 'make a loop' })
+    expect(loop.body.error.message).toMatch(/cannot refer each other/)
+    expect((await write(boss, `/admin/v1/users/${c.userId}/referrer`, { referrer: 'nobody_here_x', reason: 'unknown one' })).status).toBe(400)
+  })
+
+  it('is for super admins only', async () => {
+    const fin = await makeAdmin('finance')
+    const a = await member(http)
+    const b = await member(http)
+    const res = await write(fin, `/admin/v1/users/${b.userId}/referrer`, { referrer: a.username, reason: 'not allowed' })
+    expect(res.status).toBe(403)
+  })
+})
+
 describe('overview, security events and the audit log', () => {
   it('reports a consistent ledger', async () => {
     const v = await makeAdmin('viewer')

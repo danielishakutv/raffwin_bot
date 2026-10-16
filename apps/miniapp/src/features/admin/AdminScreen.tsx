@@ -443,6 +443,17 @@ function PlayerDetail({ id, can, onBack }: { id: string; can: string[]; onBack: 
     const reason = await askText(`Why ${to}?`)
     if (reason) void action.run(() => adminCall('POST', `/users/${id}/${to}`, { reason })).then(reload)
   }
+  const assignReferrer = async () => {
+    const referrer = await askText('Referred by which player? Their username (e.g. @ada_obi) or Telegram id.')
+    if (!referrer) return
+    const reason = await askText('Why? (recorded in the audit log)')
+    if (!reason) return
+    const updated = await action.run(() => adminCall<AdminUserDetail>('POST', `/users/${id}/referrer`, { referrer, reason }))
+    if (updated) {
+      setDone(`Now referred by @${updated.user.referredByUsername}. They earn 10% on this player's entries from now on.`)
+      reload()
+    }
+  }
   const adjust = async () => {
     const raffs = Number(await askText('Raffs to credit (negative to debit)') ?? '')
     if (!Number.isInteger(raffs) || raffs === 0) return
@@ -482,6 +493,11 @@ function PlayerDetail({ id, can, onBack }: { id: string; can: string[]; onBack: 
                   Reinstate
                 </button>
               ))}
+            {can.includes('users.referrer.assign') && !d.user.referredByUsername && (
+              <button type="button" className={btn} onClick={() => void assignReferrer()}>
+                Set referred by
+              </button>
+            )}
             {can.includes('users.adjust.request') && (
               <button type="button" className={btn} onClick={() => void adjust()}>
                 Ask to adjust balance
