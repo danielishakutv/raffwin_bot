@@ -1,0 +1,28 @@
+{
+  "name": "raffwin-bot",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Minimal Telegram bot for Raffle Win: /start, /help, /rules with an Open Raffle Win button",
+  "type": "module",
+  "main": "dist/polling.js",
+  "scripts": {
+    "dev": "tsx watch src/polling.ts",
+    "start": "node dist/polling.js",
+    "start:webhook": "node dist/server.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "set-webhook": "tsx src/set-webhook.ts",
+    "delete-webhook": "tsx src/set-webhook.ts --delete"
+  },
+  "dependencies": {
+    "grammy": "^1.36.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "~5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
