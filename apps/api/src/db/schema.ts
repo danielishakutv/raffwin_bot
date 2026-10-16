@@ -63,7 +63,10 @@ export const users = pgTable(
     /** Maintained in the same transaction as every ledger row (milestone 2). */
     balanceCache: integer('balance_cache').notNull().default(0),
 
+    /** Set on first open (there is no sign-up form since 16 Oct) */
     signedUpAt: timestamp('signed_up_at', { withTimezone: true }),
+    /** Name, verified phone and delivery point all given on the KYC page */
+    kycCompletedAt: timestamp('kyc_completed_at', { withTimezone: true }),
     onboardingCompletedAt: timestamp('onboarding_completed_at', { withTimezone: true }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     createdAt: createdAt(),
@@ -122,6 +125,11 @@ export const initDataUses = pgTable('initdata_uses', {
   lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
+/**
+ * DEPRECATED (16 Oct): street addresses are no longer collected; prizes go to
+ * the winner's nearest motor park (delivery_points). Kept, unused, rather
+ * than dropped, so no migration removes data.
+ */
 export const addresses = pgTable('addresses', {
   userId: uuid('user_id')
     .primaryKey()
@@ -166,9 +174,26 @@ export const securityEvents = pgTable(
   ],
 )
 
+/**
+ * Where a winner collects a physical prize: their city and the nearest motor
+ * park, never a house address (security decision of 16 Oct). Filled on the
+ * KYC page together with the name and the Telegram-verified phone.
+ */
+export const deliveryPoints = pgTable('delivery_points', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id),
+  state: text('state').notNull(),
+  city: text('city').notNull(),
+  motorPark: text('motor_park').notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+})
+
 export type UserRow = typeof users.$inferSelect
 export type SessionRow = typeof sessions.$inferSelect
 export type AddressRow = typeof addresses.$inferSelect
+export type DeliveryPointRow = typeof deliveryPoints.$inferSelect
 
 /* ============================================================================
  * Milestone 2: settings, rates, raffles, entries, ledger, referrals, admin
@@ -360,12 +385,25 @@ export const adminUsers = pgTable(
   'admin_users',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    /** Stored lower-case */
-    email: text('email').notNull(),
+    /**
+     * Two ways in (decision of 16 Oct):
+     *  - Telegram: opening the bot as this Telegram account is enough. The id
+     *    is linked automatically the first time the account whose username
+     *    matches telegram_username opens the bot.
+     *  - Browser: the secret admin URL, the master password, then username + password.
+     */
+    telegramId: bigint('telegram_id', { mode: 'number' }),
+    /** Lower-case, without @; used only to link telegram_id on first open */
+    telegramUsername: text('telegram_username'),
+    /** Browser sign-in name, lower-case */
+    username: text('username'),
+    /** argon2id; null = this admin works from Telegram only */
+    passwordHash: text('password_hash'),
+    /** Optional contact, stored lower-case */
+    email: text('email'),
     name: text('name').notNull(),
-    passwordHash: text('password_hash').notNull(),
-    /** AES-256-GCM with ADMIN_DATA_KEY */
-    totpSecretEnc: text('totp_secret_enc').notNull(),
+    /** Not used since 16 Oct (no codes); kept nullable rather than dropped */
+    totpSecretEnc: text('totp_secret_enc'),
     /** Last accepted TOTP time step, so one code cannot be used twice */
     totpLastStep: bigint('totp_last_step', { mode: 'number' }),
     role: text('role', { enum: ADMIN_ROLES }).notNull(),
@@ -376,7 +414,12 @@ export const adminUsers = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex('admin_users_email_key').on(t.email)],
+  (t) => [
+    uniqueIndex('admin_users_email_key').on(t.email),
+    uniqueIndex('admin_users_telegram_id_key').on(t.telegramId).where(sql`${t.telegramId} is not null`),
+    uniqueIndex('admin_users_username_key').on(t.username).where(sql`${t.username} is not null`),
+    uniqueIndex('admin_users_telegram_username_key').on(t.telegramUsername).where(sql`${t.telegramUsername} is not null`),
+  ],
 )
 
 export const adminSessions = pgTable(
@@ -395,6 +438,46 @@ export const adminSessions = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('admin_sessions_token_key').on(t.tokenHash), index('admin_sessions_admin_idx').on(t.adminId)],
+)
+
+/**
+ * The bot's admin login conversation (hidden command -> master password ->
+ * username -> password). Kept in the database so it survives restarts and
+ * works across API processes. One row per Telegram account.
+ */
+export const adminLoginFlows = pgTable(
+  'admin_login_flows',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    telegramId: bigint('telegram_id', { mode: 'number' }).notNull(),
+    chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+    step: text('step', { enum: ['master', 'username', 'password', 'idle'] }).notNull(),
+    username: text('username'),
+    /** Wrong master passwords or admin passwords in a row; 5 locks this Telegram account for an hour */
+    failedCount: integer('failed_count').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('admin_login_flows_telegram_key').on(t.telegramId)],
+)
+
+/** One-time, 5-minute tickets the bot hands out after a successful command login. */
+export const adminTickets = pgTable(
+  'admin_tickets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    adminId: uuid('admin_id')
+      .notNull()
+      .references(() => adminUsers.id),
+    telegramId: bigint('telegram_id', { mode: 'number' }).notNull(),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('admin_tickets_token_key').on(t.tokenHash)],
 )
 
 /**

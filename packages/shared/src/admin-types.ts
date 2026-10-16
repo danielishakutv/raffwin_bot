@@ -4,10 +4,18 @@ export type AdminRole = 'super_admin' | 'raffle_manager' | 'finance' | 'support'
 
 export interface AdminMe {
   id: string
-  email: string
   name: string
+  telegramId: number | null
   role: AdminRole
   permissions: string[]
+}
+
+/** POST /admin/v1/auth/telegram */
+export interface AdminLoginResponse {
+  /** Bearer token for the admin API: keep in memory only */
+  token: string
+  expiresAt: number
+  admin: AdminMe
 }
 
 export interface AdminPrize {

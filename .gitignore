@@ -12,6 +12,9 @@ bot/dist
 .env
 .env.local
 .env.*.local
+# backups of env files hold the same secrets
+.env.bak*
+*.env.bak*
 bot/.env
 bot/.env.local
 

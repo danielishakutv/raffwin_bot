@@ -33,13 +33,16 @@ describe('POST /v1/auth/telegram', () => {
     expect(s.accessToken).toMatch(/^ey/)
     expect(s.refreshToken).toHaveLength(43)
     const [row] = await db.select().from(users).where(eq(users.telegramId, s.id))
-    expect(row).toMatchObject({ status: 'active', signedUpAt: null })
+    // No sign-up form: the first open makes a complete account
+    expect(row).toMatchObject({ status: 'active' })
+    expect(row?.signedUpAt).toBeInstanceOf(Date)
     expect(row?.referralCode).toMatch(/^[2-9A-HJKMNP-Z]{8}$/)
 
     const boot = await http.get('/v1/bootstrap').set('authorization', `Bearer ${s.accessToken}`)
     expect(boot.status).toBe(200)
     // Raffles are shared by every test file in the run, so only their presence is checked
-    expect(boot.body).toMatchObject({ profile: null, onboardingComplete: false, balance: 0, entries: [], transactions: [] })
+    expect(boot.body).toMatchObject({ onboardingComplete: false, balance: 0, entries: [], transactions: [] })
+    expect(boot.body.profile).toMatchObject({ kycComplete: false, phone: null })
     expect(Array.isArray(boot.body.raffles)).toBe(true)
   })
 

@@ -28,6 +28,7 @@ const email = z
   .max(254)
   .superRefine(rule(validateEmail))
   .transform((v) => v.trim().toLowerCase())
+  .nullable()
 
 export const telegramAuthBody = z.object({
   initData: z.string().min(1).max(8192),
@@ -37,12 +38,14 @@ export const refreshBody = z.object({
   refreshToken: z.string().min(32).max(256),
 })
 
-export const signUpBody = z.object({
+/** KYC: who collects a prize and at which motor park. No house address, ever. */
+export const kycBody = z.object({
   fullName,
-  username,
-  email,
-  /** The signed string from WebApp.requestContact; see SignUpInput.contactProof */
-  contactProof: z.string().min(1).max(4096),
+  state: z.string().trim().min(2, 'Choose your state').max(40),
+  city: z.string().trim().min(2, 'Enter your city or town').max(80),
+  motorPark: z.string().trim().min(3, 'Enter the motor park nearest to you').max(120),
+  /** The signed string from WebApp.requestContact; required until the phone is verified */
+  contactProof: z.string().min(1).max(4096).optional(),
 })
 
 export const usernameQuery = z.object({ username: z.string().max(40) })
@@ -53,14 +56,6 @@ export const profilePatchBody = z
   .partial()
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update' })
-
-export const addressBody = z.object({
-  street: z.string().trim().min(3, 'Enter the street address').max(200),
-  city: z.string().trim().min(2, 'Enter the city or town').max(80),
-  state: z.string().trim().min(2, 'Choose a state').max(40),
-  landmark: z.string().trim().max(120).default(''),
-  phone: z.string().trim().max(20).default(''),
-})
 
 export const contactPrefsBody = z.object({
   whatsapp: z.boolean(),
@@ -83,7 +78,6 @@ export const cursorQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
 })
 
-export type SignUpBody = z.infer<typeof signUpBody>
+export type KycBody = z.infer<typeof kycBody>
 export type EnterRaffleBody = z.infer<typeof enterRaffleBody>
 export type ProfilePatchBody = z.infer<typeof profilePatchBody>
-export type AddressBody = z.infer<typeof addressBody>

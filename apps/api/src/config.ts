@@ -48,34 +48,36 @@ const schema = z.object({
   /** Git commit, set by the deploy script; reported by /health. */
   GIT_COMMIT: z.string().default('unknown'),
 
+  /**
+   * The Mini App's own address, e.g. https://raffwintest.toko.com.ng/ - the
+   * bot's buttons open it, and the webhook lives at <it>/api/telegram/webhook.
+   */
+  PUBLIC_APP_URL: z.string().url().startsWith('https://', 'Telegram only opens Mini Apps over https').optional(),
+  /** Telegram sends it back in X-Telegram-Bot-Api-Secret-Token on every update. Unset = no webhook route. */
+  TELEGRAM_WEBHOOK_SECRET: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{24,256}$/, 'TELEGRAM_WEBHOOK_SECRET: 24-256 of A-Z a-z 0-9 _ -')
+    .optional(),
+
   /* Admin ------------------------------------------------------------------ */
-  /** 32 random bytes, base64url: encrypts admin TOTP secrets at rest. Same generator as JWT_SECRET with 32. */
-  ADMIN_DATA_KEY: z.string().length(43, 'ADMIN_DATA_KEY must be 32 random bytes, base64url (43 characters)'),
+  /**
+   * argon2id hash of the master password the bot asks for first. Make it with
+   *   pnpm --filter @raffwin/api admin:master-hash
+   * Unset = admin sign-in through the bot is switched off.
+   */
+  ADMIN_MASTER_PASSWORD_HASH: z.string().startsWith('$argon2id$').optional(),
+  /** The hidden bot command that starts admin sign-in (never listed in the bot's menu) */
+  ADMIN_BOT_COMMAND: z.string().regex(/^[a-z0-9_]{4,32}$/, 'ADMIN_BOT_COMMAND: 4-32 of a-z 0-9 _').default('staffdesk'),
+  /** Optional, 32 random bytes base64url: reserved for encrypting admin secrets at rest (unused since codes were dropped) */
+  ADMIN_DATA_KEY: z.string().length(43, 'ADMIN_DATA_KEY must be 32 random bytes, base64url (43 characters)').optional(),
   ADMIN_SESSION_HOURS: z.coerce.number().int().min(1).max(24).default(8),
   ADMIN_IDLE_MINUTES: z.coerce.number().int().min(5).max(240).default(30),
-  /**
-   * Cloudflare Access in front of admin.rafflewin.com.ng (email one-time code).
-   * Team domain, e.g. rafflewin.cloudflareaccess.com, and the application AUD tag.
-   * Required in staging and production: the admin API refuses requests without a valid Access token.
-   */
-  CF_ACCESS_TEAM_DOMAIN: z.string().optional(),
-  CF_ACCESS_AUD: z.string().optional(),
 })
 
 export type Config = z.infer<typeof schema>
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = schema
-    .superRefine((c, ctx) => {
-      if ((c.NODE_ENV === 'production' || c.NODE_ENV === 'staging') && (!c.CF_ACCESS_TEAM_DOMAIN || !c.CF_ACCESS_AUD)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['CF_ACCESS_AUD'],
-          message: 'CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD are required in staging and production',
-        })
-      }
-    })
-    .safeParse(env)
+  const parsed = schema.safeParse(env)
   if (!parsed.success) {
     const lines = parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`)
     throw new Error(`Invalid API environment:\n${lines.join('\n')}`)

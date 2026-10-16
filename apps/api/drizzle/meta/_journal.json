@@ -22,6 +22,27 @@
       "when": 1792158861602,
       "tag": "0002_m2_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792161914744,
+      "tag": "0003_m2b_telegram_only_kyc_motor_park",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792162697851,
+      "tag": "0004_m2c_admin_web_login",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792162750242,
+      "tag": "0005_m2d_admin_bot_login",
+      "breakpoints": true
     }
   ]
 }

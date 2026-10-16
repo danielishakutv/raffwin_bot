@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { webhookCallback } from 'grammy'
+import { createBot } from './bot/bot'
 import cors from 'cors'
 import express, { type Express, type RequestHandler } from 'express'
 import { rateLimit } from 'express-rate-limit'
@@ -65,12 +67,14 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Express {
     })
   })
 
+  mountBotWebhook(ctx, app)
+
   app.use('/v1', limiter(ctx, limits.global, 'global'))
   app.use('/v1/auth', limiter(ctx, limits.auth, 'auth'))
   app.use('/v1', v1Routes(ctx))
 
   app.use('/admin/v1', limiter(ctx, limits.global, 'admin'))
-  app.use('/admin/v1/auth/login', limiter(ctx, limits.auth, 'admin_login'))
+  app.use('/admin/v1/auth/ticket', limiter(ctx, limits.auth, 'admin_login'))
   app.use('/admin/v1', adminRoutes(ctx))
 
   app.use(notFound)
@@ -100,6 +104,38 @@ function limiter(ctx: AppContext, perMinute: number, name: string): RequestHandl
       }
       res.status(429).json(body)
     },
+  })
+}
+
+/**
+ * POST /telegram/webhook (Apache serves it as /api/telegram/webhook). Mounted
+ * only when the env names a secret; a request without that secret is recorded
+ * and refused before grammY sees it.
+ */
+function mountBotWebhook(ctx: AppContext, app: Express): void {
+  const secret = ctx.config.TELEGRAM_WEBHOOK_SECRET
+  const appUrl = ctx.config.PUBLIC_APP_URL
+  if (!secret || !appUrl) return
+  const bot = createBot({ token: ctx.config.BOT_TOKEN, appUrl, envLabel: ctx.config.NODE_ENV, log: ctx.log, app: ctx })
+  const handle = webhookCallback(bot, 'express', { secretToken: secret, onTimeout: 'return', timeoutMilliseconds: 9_000 })
+  app.post('/telegram/webhook', async (req, res, next) => {
+    const given = req.get('x-telegram-bot-api-secret-token') ?? ''
+    const ok = given.length === secret.length && timingSafeEqual(Buffer.from(given), Buffer.from(secret))
+    if (!ok) {
+      const meta = requestMeta(ctx, req)
+      await recordSecurityEvent(ctx.db, ctx.log, {
+        severity: 'high',
+        category: 'webhook',
+        kind: 'webhook_bad_secret',
+        ipHash: meta.ipHash,
+        route: meta.route,
+        requestId: meta.requestId,
+        actionTaken: 'blocked',
+      })
+      res.status(401).end()
+      return
+    }
+    return handle(req, res).catch(next)
   })
 }
 

@@ -1,14 +1,17 @@
 /**
- * The signed-in user's own account: bootstrap, sign-up, profile, address,
- * contact preferences, onboarding. Responses use the shared Profile and
- * Bootstrap shapes, so the Mini App reads them exactly like the mock API.
+ * The player's own account: bootstrap, profile, KYC, contact preferences,
+ * onboarding. There is no sign-up: the account is created complete on the
+ * first open of the bot (services/auth.ts). Personal details beyond the
+ * Telegram name are asked for only on the KYC page, to deliver a prize to the
+ * player's nearest motor park. Responses use the shared shapes, so the Mini
+ * App reads them exactly like the mock API.
  */
-import { and, eq, isNotNull, ne, sql } from 'drizzle-orm'
+import { and, eq, ne, sql } from 'drizzle-orm'
 import { normalizeNigerianPhone, type Bootstrap, type ContactPrefs, type Profile } from '@raffwin/shared'
-import type { AddressBody, ProfilePatchBody, SignUpBody } from '@raffwin/shared/schemas'
+import type { KycBody, ProfilePatchBody } from '@raffwin/shared/schemas'
 import type { AppContext, RequestMeta } from '../context'
 import { uniqueViolation } from '../db/client'
-import { addresses, users, type AddressRow, type UserRow } from '../db/schema'
+import { adminUsers, deliveryPoints, users, type DeliveryPointRow, type UserRow } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
 import { readSharedContact, verifyTelegramData } from '../lib/telegram-auth'
@@ -18,8 +21,8 @@ import { entriesForPlayer, listForPlayer } from './raffles'
 /** A contact share is fresh when it was made within this window. */
 const CONTACT_PROOF_MAX_AGE_SECONDS = 60 * 60
 
-export function toProfile(user: UserRow, address: AddressRow | null): Profile | null {
-  if (!user.signedUpAt || !user.username || !user.fullName || !user.email || !user.phone) return null
+export function toProfile(user: UserRow, delivery: DeliveryPointRow | null, isAdmin: boolean): Profile | null {
+  if (!user.signedUpAt || !user.username || !user.fullName) return null
   return {
     id: user.id,
     fullName: user.fullName,
@@ -30,18 +33,26 @@ export function toProfile(user: UserRow, address: AddressRow | null): Profile | 
     createdAt: user.signedUpAt.toISOString(),
     telegramId: user.telegramId,
     referralCode: user.referralCode,
-    address: address
-      ? { street: address.street, city: address.city, state: address.state, landmark: address.landmark, phone: address.phone }
-      : null,
+    delivery: delivery ? { state: delivery.state, city: delivery.city, motorPark: delivery.motorPark } : null,
+    kycComplete: user.kycCompletedAt !== null,
+    isAdmin,
     contactPrefs: { whatsapp: user.contactWhatsapp, telegram: user.contactTelegram, email: user.contactEmail },
-    // KYC arrives in milestone 5; until then every account is unverified.
+    // Identity documents are not collected (16 Oct): delivery is to a motor park, by name and phone
     verification: { status: 'unverified', idImage: null, selfieImage: null, submittedAt: null },
   }
 }
 
-async function loadAddress(ctx: AppContext, userId: string): Promise<AddressRow | null> {
-  const [row] = await ctx.db.select().from(addresses).where(eq(addresses.userId, userId))
+async function loadDelivery(ctx: AppContext, userId: string): Promise<DeliveryPointRow | null> {
+  const [row] = await ctx.db.select().from(deliveryPoints).where(eq(deliveryPoints.userId, userId))
   return row ?? null
+}
+
+async function isAdminAccount(ctx: AppContext, telegramId: number): Promise<boolean> {
+  const [row] = await ctx.db
+    .select({ id: adminUsers.id })
+    .from(adminUsers)
+    .where(and(eq(adminUsers.telegramId, telegramId), eq(adminUsers.status, 'active')))
+  return !!row
 }
 
 async function reload(ctx: AppContext, userId: string): Promise<UserRow> {
@@ -50,20 +61,27 @@ async function reload(ctx: AppContext, userId: string): Promise<UserRow> {
   return row
 }
 
-function requireSignedUp(user: UserRow): void {
-  if (!user.signedUpAt) throw new HttpError('NOT_SIGNED_IN', 'Create your account first.')
+function requireAccount(user: UserRow): void {
+  if (!user.signedUpAt) throw new HttpError('NOT_SIGNED_IN', 'Close Raffle Win and open it again from the bot.')
+}
+
+async function profileOf(ctx: AppContext, user: UserRow): Promise<Profile> {
+  const [delivery, admin] = await Promise.all([loadDelivery(ctx, user.id), isAdminAccount(ctx, user.telegramId)])
+  const profile = toProfile(user, delivery, admin)
+  if (!profile) throw new HttpError('NOT_SIGNED_IN', 'Close Raffle Win and open it again from the bot.')
+  return profile
 }
 
 export async function bootstrap(ctx: AppContext, user: UserRow): Promise<Bootstrap> {
-  const profile = toProfile(user, await loadAddress(ctx, user.id))
-  const [raffleList, entryList, transactions] = await Promise.all([
+  const [profile, raffleList, entryList, transactions] = await Promise.all([
+    profileOf(ctx, user),
     listForPlayer(ctx.db, user.id, ctx.now()),
     entriesForPlayer(ctx.db, user.id),
     recentTransactions(ctx.db, user.id),
   ])
   return {
     profile,
-    onboardingComplete: profile !== null && user.onboardingCompletedAt !== null,
+    onboardingComplete: user.onboardingCompletedAt !== null,
     balance: user.balanceCache,
     raffles: raffleList,
     entries: entryList,
@@ -84,48 +102,53 @@ function conflictError(error: unknown): HttpError | null {
   const constraint = uniqueViolation(error)
   if (constraint === 'users_username_key') return new HttpError('USERNAME_TAKEN', 'That username is already taken.')
   if (constraint === 'users_phone_key') {
-    return new HttpError('PHONE_IN_USE', 'That phone number already has a Raffle Win account. One account per person.')
+    return new HttpError('PHONE_IN_USE', 'That phone number is already on another Raffle Win account. One account per person.')
   }
   return null
 }
 
-export async function signUp(ctx: AppContext, user: UserRow, body: SignUpBody, meta: RequestMeta): Promise<Bootstrap> {
-  if (user.signedUpAt) throw new HttpError('ALREADY_REGISTERED', 'This Telegram account already has a Raffle Win account.')
-
-  const phone = await verifiedPhone(ctx, user, body.contactProof, meta)
-
-  if (!(await isUsernameAvailable(ctx, body.username, user.id))) {
-    throw new HttpError('USERNAME_TAKEN', 'That username is already taken.')
+/**
+ * KYC: name, the phone Telegram verified, and the motor park to deliver to.
+ * The phone is taken only from Telegram's signed contact share, and only when
+ * the shared contact is this account itself. Once verified, later KYC edits
+ * (a new motor park, say) do not need a new share.
+ */
+export async function saveKyc(ctx: AppContext, user: UserRow, body: KycBody, meta: RequestMeta): Promise<Profile> {
+  requireAccount(user)
+  let phone = user.phone
+  if (body.contactProof) phone = await verifiedPhone(ctx, user, body.contactProof, meta)
+  else if (!user.phoneVerifiedAt) {
+    throw new HttpError('PHONE_NOT_VERIFIED', 'Share your phone number through Telegram so the courier can call you.')
   }
 
-  const referrerId = await resolveReferrer(ctx, user, phone, meta)
   const now = new Date(ctx.now())
   try {
-    await ctx.db
-      .update(users)
-      .set({
-        username: body.username,
-        fullName: body.fullName,
-        email: body.email,
-        phone,
-        phoneVerifiedAt: now,
-        signedUpAt: now,
-        referredByUserId: referrerId,
-        referredAt: referrerId ? now : null,
-        updatedAt: sql`now()`,
-      })
-      // The where clause makes a double-submit a no-op instead of a second sign-up
-      .where(and(eq(users.id, user.id), sql`${users.signedUpAt} is null`))
+    await ctx.db.transaction(async (tx) => {
+      await tx
+        .update(users)
+        .set({
+          fullName: body.fullName,
+          phone,
+          phoneVerifiedAt: body.contactProof ? now : user.phoneVerifiedAt,
+          kycCompletedAt: sql`coalesce(${users.kycCompletedAt}, ${now})`,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(users.id, user.id))
+      const point = { state: body.state, city: body.city, motorPark: body.motorPark }
+      await tx
+        .insert(deliveryPoints)
+        .values({ userId: user.id, ...point })
+        .onConflictDoUpdate({ target: deliveryPoints.userId, set: { ...point, updatedAt: sql`now()` } })
+    })
   } catch (error) {
+    if (uniqueViolation(error) === 'users_phone_key' && phone && user.referredByUserId) {
+      await flagSelfReferral(ctx, user, phone, meta)
+    }
     throw conflictError(error) ?? error
   }
-  return bootstrap(ctx, await reload(ctx, user.id))
+  return profileOf(ctx, await reload(ctx, user.id))
 }
 
-/**
- * The phone comes only from Telegram's signed contact share, and only when the
- * shared contact is the signed-in account itself.
- */
 async function verifiedPhone(ctx: AppContext, user: UserRow, proof: string, meta: RequestMeta): Promise<string> {
   const verified = verifyTelegramData(proof, ctx.config.BOT_TOKEN, {
     maxAgeSeconds: CONTACT_PROOF_MAX_AGE_SECONDS,
@@ -149,11 +172,11 @@ async function verifiedPhone(ctx: AppContext, user: UserRow, proof: string, meta
       userId: user.id,
       requestId: meta.requestId,
     })
-    throw new HttpError('PHONE_NOT_VERIFIED', 'Share your phone number through Telegram to finish creating your account.')
+    throw new HttpError('PHONE_NOT_VERIFIED', 'Share your phone number through Telegram so the courier can call you.')
   }
   const phone = normalizeNigerianPhone((contact as { phone_number: string }).phone_number)
   if (!phone) {
-    throw new HttpError('INVALID_INPUT', 'Raffle Win needs a Nigerian mobile number on your Telegram account.', {
+    throw new HttpError('INVALID_INPUT', 'Raffle Win delivers in Nigeria only, to a Nigerian number on your Telegram account.', {
       phone: 'Your Telegram account uses a number outside Nigeria.',
     })
   }
@@ -161,42 +184,29 @@ async function verifiedPhone(ctx: AppContext, user: UserRow, proof: string, meta
 }
 
 /**
- * Binds the referrer seen on first open, if that code belongs to a signed-up,
- * active account that is not this person under another name (same phone).
- * A failed binding never blocks sign-up; it is recorded instead.
+ * The referral bond is set on first open, before any phone is known. One phone
+ * belongs to one account, so the friend's KYC is refused when they verify the
+ * referrer's own number; that refusal means one person on two Telegram
+ * accounts and is recorded for review (earnings paid so far stay visible in
+ * the ledger).
  */
-async function resolveReferrer(ctx: AppContext, user: UserRow, phone: string, meta: RequestMeta): Promise<string | null> {
-  const code = user.pendingReferralCode
-  if (!code) return null
-  const [referrer] = await ctx.db
-    .select({ id: users.id, phone: users.phone, status: users.status })
-    .from(users)
-    .where(and(eq(users.referralCode, code), isNotNull(users.signedUpAt)))
-  const reason = !referrer
-    ? 'referral_unknown_code'
-    : referrer.id === user.id || referrer.phone === phone
-      ? 'referral_self'
-      : referrer.status !== 'active'
-        ? 'referral_inactive_referrer'
-        : null
-  if (reason) {
-    await recordSecurityEvent(ctx.db, ctx.log, {
-      severity: reason === 'referral_self' ? 'medium' : 'low',
-      category: 'fraud',
-      kind: reason,
-      ipHash: meta.ipHash,
-      route: meta.route,
-      userId: user.id,
-      requestId: meta.requestId,
-      details: { code },
-    })
-    return null
-  }
-  return (referrer as { id: string }).id
+async function flagSelfReferral(ctx: AppContext, user: UserRow, phone: string, meta: RequestMeta): Promise<void> {
+  const [referrer] = await ctx.db.select({ phone: users.phone }).from(users).where(eq(users.id, user.referredByUserId as string))
+  if (referrer?.phone !== phone) return
+  await recordSecurityEvent(ctx.db, ctx.log, {
+    severity: 'high',
+    category: 'fraud',
+    kind: 'referral_self_same_phone',
+    ipHash: meta.ipHash,
+    route: meta.route,
+    userId: user.id,
+    requestId: meta.requestId,
+    details: { referrerUserId: user.referredByUserId },
+  })
 }
 
 export async function completeOnboarding(ctx: AppContext, user: UserRow): Promise<{ onboardingComplete: boolean }> {
-  requireSignedUp(user)
+  requireAccount(user)
   await ctx.db
     .update(users)
     .set({ onboardingCompletedAt: sql`coalesce(${users.onboardingCompletedAt}, now())`, updatedAt: sql`now()` })
@@ -205,12 +215,12 @@ export async function completeOnboarding(ctx: AppContext, user: UserRow): Promis
 }
 
 export async function getProfile(ctx: AppContext, user: UserRow): Promise<Profile> {
-  requireSignedUp(user)
-  return toProfile(user, await loadAddress(ctx, user.id)) as Profile
+  requireAccount(user)
+  return profileOf(ctx, user)
 }
 
 export async function updateProfile(ctx: AppContext, user: UserRow, patch: ProfilePatchBody): Promise<Profile> {
-  requireSignedUp(user)
+  requireAccount(user)
   if (patch.username && !(await isUsernameAvailable(ctx, patch.username, user.id))) {
     throw new HttpError('USERNAME_TAKEN', 'That username is already taken.')
   }
@@ -222,20 +232,11 @@ export async function updateProfile(ctx: AppContext, user: UserRow, patch: Profi
   } catch (error) {
     throw conflictError(error) ?? error
   }
-  return getProfile(ctx, await reload(ctx, user.id))
-}
-
-export async function updateAddress(ctx: AppContext, user: UserRow, address: AddressBody): Promise<Profile> {
-  requireSignedUp(user)
-  await ctx.db
-    .insert(addresses)
-    .values({ userId: user.id, ...address })
-    .onConflictDoUpdate({ target: addresses.userId, set: { ...address, updatedAt: sql`now()` } })
-  return getProfile(ctx, user)
+  return profileOf(ctx, await reload(ctx, user.id))
 }
 
 export async function updateContactPrefs(ctx: AppContext, user: UserRow, prefs: ContactPrefs): Promise<Profile> {
-  requireSignedUp(user)
+  requireAccount(user)
   await ctx.db
     .update(users)
     .set({
@@ -245,5 +246,5 @@ export async function updateContactPrefs(ctx: AppContext, user: UserRow, prefs: 
       updatedAt: sql`now()`,
     })
     .where(eq(users.id, user.id))
-  return getProfile(ctx, await reload(ctx, user.id))
+  return profileOf(ctx, await reload(ctx, user.id))
 }

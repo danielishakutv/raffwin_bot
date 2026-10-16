@@ -20,6 +20,8 @@ export const PERMISSIONS = [
   'approvals.decide',
   'security.read',
   'audit.read',
+  /** Add, disable and reset admins: super_admin only */
+  'admins.manage',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]

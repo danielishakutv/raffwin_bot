@@ -12,7 +12,9 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
-    "admin:create": "tsx --env-file-if-exists=.env src/cli/create-admin.ts"
+    "admin:create": "tsx --env-file-if-exists=.env src/cli/create-admin.ts",
+    "dev:seed": "tsx --env-file-if-exists=.env src/cli/dev-seed.ts",
+    "admin:master-hash": "tsx src/cli/master-hash.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "2.2.1",
@@ -21,6 +23,7 @@
     "drizzle-orm": "0.45.4",
     "express": "5.3.0",
     "express-rate-limit": "8.7.1",
+    "grammy": "1.46.0",
     "helmet": "8.3.0",
     "jose": "6.2.12",
     "pg": "8.23.1",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { isReferralCode, parseStartParam, referralEarning, REFERRAL_CODE_ALPHABET } from './referral'
 import { normalizeNigerianPhone } from './phone'
-import { profilePatchBody, signUpBody } from './schemas'
+import { kycBody, profilePatchBody } from './schemas'
 import { hourlyQuote, hourStart, raffsForStars, RATE_TTL_MS } from './rate'
 
 describe('hourlyQuote', () => {
@@ -88,21 +88,14 @@ describe('normalizeNigerianPhone', () => {
 })
 
 describe('schemas', () => {
-  it('normalises sign-up fields the same way the form does', () => {
-    const parsed = signUpBody.parse({
-      fullName: '  Ada Obi ',
-      username: ' Ada_Obi ',
-      email: ' ADA@Example.com ',
-      contactProof: 'x',
-    })
-    expect(parsed).toEqual({ fullName: 'Ada Obi', username: 'ada_obi', email: 'ada@example.com', contactProof: 'x' })
-  })
-  it('returns the form messages for bad input', () => {
-    const result = signUpBody.safeParse({ fullName: 'Ada', username: 'a!', email: 'nope', contactProof: 'x' })
-    expect(result.success).toBe(false)
-    const messages = result.error?.issues.map((i) => i.message) ?? []
+  it('normalises KYC fields and needs a motor park, never a street', () => {
+    const parsed = kycBody.parse({ fullName: '  Ada Obi ', state: 'Lagos', city: ' Ikeja ', motorPark: ' Ojota Motor Park ' })
+    expect(parsed).toEqual({ fullName: 'Ada Obi', state: 'Lagos', city: 'Ikeja', motorPark: 'Ojota Motor Park' })
+    const bad = kycBody.safeParse({ fullName: 'Ada', state: '', city: '', motorPark: '' })
+    const messages = bad.error?.issues.map((i) => i.message) ?? []
     expect(messages).toContain('Add your surname too, e.g. Ada Obi')
-    expect(messages).toContain('That email does not look right')
+    expect(messages).toContain('Enter the motor park nearest to you')
+    expect(kycBody.safeParse({ fullName: 'Ada Obi', state: 'Lagos', city: 'Ikeja', motorPark: 'Ojota', street: '1 Allen' }).data).not.toHaveProperty('street')
   })
   it('refuses an empty profile patch', () => {
     expect(profilePatchBody.safeParse({}).success).toBe(false)

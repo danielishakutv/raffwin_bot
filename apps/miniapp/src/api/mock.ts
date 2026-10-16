@@ -14,14 +14,15 @@ import type {
   ReferralSummary,
   ReferredPerson,
   ContactPrefs,
-  DeliveryAddress,
   Entry,
+  KycInput,
   Profile,
   Raffle,
-  SignUpInput,
   Transaction,
   VerificationStatus,
 } from '@/data/types'
+import { normalizeNigerianPhone } from '@raffwin/shared'
+import { getTelegramUser } from '@/services/telegram'
 import { TAKEN_USERNAMES, seedHistoryForUser } from '@/data/seed'
 import { getRaffleStatus, isEnterable } from '@/data/raffleStatus'
 import { getRateProvider, type RateQuote } from '@/services/rates'
@@ -36,10 +37,43 @@ const jitter = (base: number, spread = 250) => delay(base + Math.random() * spre
 /** Deep-ish clone so the UI never holds references into the mock database. */
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
-function requireProfile(): Profile {
+/**
+ * Like the real API there is no sign-up: the demo account is created on the
+ * first boot from what Telegram knows (or a demo identity in a browser).
+ */
+function ensureProfile(): Profile {
   const db = loadDb()
-  if (!db.profile) throw new ApiError('NOT_SIGNED_IN', 'Create your account first.')
-  return db.profile
+  if (db.profile) return db.profile
+  const tg = getTelegramUser()
+  const now = Date.now()
+  const profile: Profile = {
+    id: newId('usr'),
+    fullName: tg ? [tg.first_name, tg.last_name].filter(Boolean).join(' ') : 'Demo Player',
+    username: tg?.username?.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20) || 'demo_player',
+    phone: null,
+    phoneVerified: false,
+    email: null,
+    createdAt: new Date(now).toISOString(),
+    telegramId: tg?.id ?? null,
+    referralCode: 'DEMO2345',
+    delivery: null,
+    kycComplete: false,
+    isAdmin: false,
+    contactPrefs: { whatsapp: true, telegram: true, email: false },
+    verification: { status: 'unverified', idImage: null, selfieImage: null, submittedAt: null },
+  }
+  return mutateDb((d) => {
+    d.profile = profile
+    const seeded = seedHistoryForUser(profile, d.raffles, now)
+    d.entries = seeded.entries
+    d.transactions = seeded.transactions
+    d.balance = seeded.balance
+    return profile
+  })
+}
+
+function requireProfile(): Profile {
+  return ensureProfile()
 }
 
 /* ----------------------------------------------------------------------------
@@ -48,6 +82,7 @@ function requireProfile(): Profile {
 
 export async function getBootstrap(): Promise<Bootstrap> {
   await jitter(500)
+  ensureProfile()
   const db = loadDb()
   return clone({
     profile: db.profile,
@@ -81,35 +116,22 @@ export async function checkUsername(username: string): Promise<{ available: bool
   return { available: !taken }
 }
 
-export async function signUp(input: SignUpInput): Promise<Bootstrap> {
-  await jitter(900, 400)
-  const username = input.username.trim().toLowerCase()
-  if ((TAKEN_USERNAMES as readonly string[]).includes(username)) {
-    throw new ApiError('USERNAME_TAKEN', 'That username is already taken.')
-  }
-  const now = Date.now()
-  const profile: Profile = {
-    id: newId('usr'),
-    fullName: input.fullName.trim(),
-    username,
-    phone: input.phone,
-    phoneVerified: false,
-    email: input.email.trim().toLowerCase(),
-    createdAt: new Date(now).toISOString(),
-    telegramId: input.telegramId ?? null,
-    referralCode: 'DEMO2345',
-    address: null,
-    contactPrefs: { whatsapp: true, telegram: true, email: false },
-    verification: { status: 'unverified', idImage: null, selfieImage: null, submittedAt: null },
-  }
-  mutateDb((db) => {
-    db.profile = profile
-    const seeded = seedHistoryForUser(profile, db.raffles, now)
-    db.entries = seeded.entries
-    db.transactions = seeded.transactions
-    db.balance = seeded.balance
-  })
-  return getBootstrap()
+/** KYC in the demo: the phone is typed (there is no Telegram to share it), everything else as live. */
+export async function saveKyc(input: KycInput): Promise<Profile> {
+  await jitter(700, 300)
+  requireProfile()
+  const phone = input.phone ? normalizeNigerianPhone(input.phone) : null
+  return clone(
+    mutateDb((db) => {
+      const p = db.profile as Profile
+      if (!phone && !p.phone) throw new ApiError('PHONE_NOT_VERIFIED', 'Enter your phone number so the courier can call you.')
+      p.fullName = input.fullName.trim()
+      if (phone) p.phone = phone
+      p.delivery = { state: input.state.trim(), city: input.city.trim(), motorPark: input.motorPark.trim() }
+      p.kycComplete = true
+      return p
+    }),
+  )
 }
 
 export async function completeOnboarding(): Promise<{ onboardingComplete: boolean }> {
@@ -136,7 +158,7 @@ export async function updateProfile(
       const p = db.profile as Profile
       if (patch.fullName !== undefined) p.fullName = patch.fullName.trim()
       if (patch.phone !== undefined) p.phone = patch.phone
-      if (patch.email !== undefined) p.email = patch.email.trim().toLowerCase()
+      if (patch.email !== undefined) p.email = patch.email?.trim().toLowerCase() ?? null
       if (patch.username !== undefined) {
         const u = patch.username.trim().toLowerCase()
         if (u !== p.username && (TAKEN_USERNAMES as readonly string[]).includes(u)) {
@@ -144,18 +166,6 @@ export async function updateProfile(
         }
         p.username = u
       }
-      return p
-    }),
-  )
-}
-
-export async function updateAddress(address: DeliveryAddress): Promise<Profile> {
-  await jitter(600, 300)
-  requireProfile()
-  return clone(
-    mutateDb((db) => {
-      const p = db.profile as Profile
-      p.address = { ...address }
       return p
     }),
   )

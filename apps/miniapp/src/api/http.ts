@@ -10,11 +10,10 @@ import type {
   ReferralSummary,
   ReferredPerson,
   ContactPrefs,
-  DeliveryAddress,
   Entry,
   Profile,
   Raffle,
-  SignUpInput,
+  KycInput,
   Transaction,
 } from '@/data/types'
 import type { RateQuote } from '@/services/rates'
@@ -52,15 +51,14 @@ export function checkUsername(username: string): Promise<{ available: boolean }>
   return call('GET', `/v1/username-available?username=${encodeURIComponent(username.trim().toLowerCase())}`)
 }
 
-export async function signUp(input: SignUpInput): Promise<Bootstrap> {
-  if (!input.contactProof) {
-    throw new ApiError('PHONE_NOT_VERIFIED', 'Share your phone number through Telegram to finish creating your account.')
-  }
-  return call<Bootstrap>('POST', '/v1/signup', {
+/** KYC: name, Telegram-verified phone and the nearest motor park (never a house address). */
+export function saveKyc(input: KycInput): Promise<Profile> {
+  return call<Profile>('PUT', '/v1/kyc', {
     fullName: input.fullName,
-    username: input.username,
-    email: input.email,
-    contactProof: input.contactProof,
+    state: input.state,
+    city: input.city,
+    motorPark: input.motorPark,
+    ...(input.contactProof ? { contactProof: input.contactProof } : {}),
   })
 }
 
@@ -77,10 +75,6 @@ export function updateProfile(patch: Partial<Pick<Profile, 'fullName' | 'phone' 
     throw new ApiError('INVALID_INPUT', 'Your phone number is verified by Telegram and cannot be edited here.')
   }
   return call('PATCH', '/v1/profile', patch)
-}
-
-export function updateAddress(address: DeliveryAddress): Promise<Profile> {
-  return call('PUT', '/v1/profile/address', address)
 }
 
 export function updateContactPrefs(prefs: ContactPrefs): Promise<Profile> {

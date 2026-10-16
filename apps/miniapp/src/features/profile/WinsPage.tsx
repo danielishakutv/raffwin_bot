@@ -20,15 +20,15 @@ export function WinsPage() {
   useBackButton(true, () => navigate('/profile'))
 
   const medal = ['bg-sunny text-ink', 'bg-white/80 text-ink', 'bg-[#d9a066] text-ink']
-  const needsDetails = profile && (profile.verification.status !== 'verified' || !profile.address)
+  const needsDetails = profile && !profile.kycComplete
 
   return (
     <div className="flex flex-col gap-3">
       <PageHeader title="My wins" subtitle={wins.length ? `${wins.length} ${wins.length === 1 ? 'prize' : 'prizes'} so far` : 'Your trophies will live here'} back="/profile" />
       {wins.length > 0 && needsDetails && (
-        <button type="button" onClick={() => { sound.play('click'); navigate('/profile') }} className="tap flex items-center gap-3 rounded-2xl border border-sun/40 bg-sun/10 p-3 text-left text-[13px]">
+        <button type="button" onClick={() => { sound.play('click'); navigate('/kyc') }} className="tap flex items-center gap-3 rounded-2xl border border-sun/40 bg-sun/10 p-3 text-left text-[13px]">
           <Trophy size={18} className="shrink-0 text-sun" />
-          <span className="flex-1">Verify your identity and add a delivery address so your prizes can be released.</span>
+          <span className="flex-1">Add your name, phone and nearest motor park so your prizes can be delivered.</span>
           <ChevronRight size={16} className="text-sun" />
         </button>
       )}

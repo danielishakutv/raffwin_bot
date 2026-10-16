@@ -1,34 +1,37 @@
 /**
- * Admin sign-in and sessions (docs/ARCHITECTURE.md section 9).
+ * Admin sign-in (decisions of 16 Oct). There is no admin website: admins sign
+ * in through the bot, and every session needs two factors:
  *
- * Layers, outermost first:
- *   1. Cloudflare Access (email one-time code) in front of admin.rafflewin.com.ng;
- *      the API verifies the Access JWT and that its email is this admin's.
- *   2. Email + argon2id password + TOTP code, checked together, one generic error.
- *      5 failures lock the account for 15 minutes.
- *   3. An opaque session cookie: HttpOnly, SameSite=Strict, Path=/admin, 8 h
- *      absolute and 30 min idle, revocable. Writes need the X-Raffwin-Admin
- *      header, which a cross-site form cannot send.
+ *   possession: the Telegram account bound to that admin. It is bound on the
+ *               admin's first successful login, and only when that account's
+ *               username matches the telegram_username a super admin
+ *               registered. From then on the admin username works only from
+ *               that one Telegram account.
+ *   knowledge:  a hidden bot command, then the master password, the admin
+ *               username and the admin password (bot/admin-login.ts). The bot
+ *               deletes each of those messages as soon as it reads them.
+ *
+ * A successful login hands out a one-time ticket (5 minutes) on an "Open
+ * admin" button. The admin screen exchanges it, together with the Mini App's
+ * signed initData for the same Telegram account, for a bearer token: 8 h
+ * absolute, 30 min idle, revocable, held in memory only. Every login attempt
+ * and every admin request is written to the hash-chained audit log.
  */
 import { hash as argonHash, verify as argonVerify } from '@node-rs/argon2'
 import { and, eq, gt, isNull, sql } from 'drizzle-orm'
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
-import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { z } from 'zod'
 import type { AppContext } from '../context'
-import { adminSessions, adminUsers, type AdminUserRow } from '../db/schema'
+import { adminSessions, adminTickets, adminUsers, type AdminUserRow } from '../db/schema'
 import { newRefreshToken, sha256Hex } from '../lib/crypto'
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
+import { readInitDataUser, verifyTelegramData } from '../lib/telegram-auth'
 import { requestMeta } from '../http/middleware'
-import { decrypt, parseDataKey, verifyTotp } from '../lib/admin-crypto'
 import { appendAudit } from './audit'
 import { can, type Permission } from './permissions'
 
-export const ADMIN_COOKIE = 'rw_admin'
-export const CSRF_HEADER = 'x-raffwin-admin'
-const MAX_FAILED = 5
-const LOCK_MINUTES = 15
+export const TICKET_MINUTES = 5
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace -- Express's own extension point
@@ -44,173 +47,141 @@ export function adminOf(req: Request): { user: AdminUserRow; sessionId: string }
   return req.admin
 }
 
-export const adminLoginBody = z.object({
-  email: z.string().trim().toLowerCase().email().max(254),
-  password: z.string().min(1).max(256),
-  code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code from your authenticator app'),
-})
-
 export function hashPassword(password: string): Promise<string> {
   return argonHash(password)
 }
 
-// Verifying against this when the email is unknown keeps response times alike
-let dummyHash: Promise<string> | null = null
-
-function readCookie(req: Request, name: string): string | null {
-  const header = req.get('cookie') ?? ''
-  for (const part of header.split(';')) {
-    const [k, ...v] = part.trim().split('=')
-    if (k === name) return decodeURIComponent(v.join('='))
-  }
-  return null
+export async function verifyPassword(hash: string | null, password: string): Promise<boolean> {
+  if (!hash) return false
+  return argonVerify(hash, password).catch(() => false)
 }
 
-function cookieOptions(ctx: AppContext) {
-  return {
-    httpOnly: true,
-    sameSite: 'strict' as const,
-    secure: ctx.config.NODE_ENV !== 'development' && ctx.config.NODE_ENV !== 'test',
-    path: '/admin',
-  }
-}
-
-/* Cloudflare Access ---------------------------------------------------------- */
-
-const jwksByTeam = new Map<string, ReturnType<typeof createRemoteJWKSet>>()
-
-/** Returns the Access-verified email, null when Access is not configured (development/test only). */
-async function accessEmail(ctx: AppContext, req: Request): Promise<string | null> {
-  const team = ctx.config.CF_ACCESS_TEAM_DOMAIN
-  const aud = ctx.config.CF_ACCESS_AUD
-  if (!team || !aud) return null
-  const token = req.get('cf-access-jwt-assertion')
-  if (!token) throw new HttpError('AUTH_INVALID', 'Open the admin through admin.rafflewin.com.ng.')
-  let jwks = jwksByTeam.get(team)
-  if (!jwks) {
-    jwks = createRemoteJWKSet(new URL(`https://${team}/cdn-cgi/access/certs`))
-    jwksByTeam.set(team, jwks)
-  }
+/** Audits a login event in its own transaction; never lets audit trouble hide the real outcome. */
+export async function auditLogin(
+  ctx: AppContext,
+  entry: { adminId: string | null; action: string; telegramId: number; details?: Record<string, unknown>; ipHash?: string | null },
+): Promise<void> {
   try {
-    const { payload } = await jwtVerify(token, jwks, { issuer: `https://${team}`, audience: aud })
-    if (typeof payload.email !== 'string') throw new Error('no email claim')
-    return payload.email.toLowerCase()
+    await ctx.db.transaction((tx) =>
+      appendAudit(tx, {
+        adminId: entry.adminId,
+        action: entry.action,
+        targetType: 'telegram',
+        targetId: String(entry.telegramId),
+        after: entry.details ?? null,
+        ipHash: entry.ipHash ?? null,
+      }),
+    )
   } catch (error) {
+    ctx.log.error({ err: error, entry }, 'could not write admin login to the audit log')
+  }
+}
+
+/** Issues the one-time ticket the bot puts on its "Open admin" button. */
+export async function issueTicket(ctx: AppContext, adminId: string, telegramId: number): Promise<string> {
+  const ticket = newRefreshToken()
+  await ctx.db.insert(adminTickets).values({
+    adminId,
+    telegramId,
+    tokenHash: sha256Hex(ticket),
+    expiresAt: new Date(ctx.now() + TICKET_MINUTES * 60_000),
+  })
+  return ticket
+}
+
+export const ticketBody = z.object({
+  ticket: z.string().min(20).max(100),
+  initData: z.string().min(1).max(8192),
+})
+
+export interface AdminLogin {
+  admin: AdminUserRow
+  token: string
+  expiresAt: number
+}
+
+/**
+ * Ticket + initData -> admin session. The ticket must be unused and fresh, and
+ * the initData must be signed by our bot for the same Telegram account the
+ * ticket was issued to, so a ticket copied out of the chat is useless elsewhere.
+ */
+export async function exchangeTicket(ctx: AppContext, req: Request): Promise<AdminLogin> {
+  const body = ticketBody.parse(req.body)
+  const meta = requestMeta(ctx, req)
+  const now = ctx.now()
+  const verified = verifyTelegramData(body.initData, ctx.config.BOT_TOKEN, {
+    maxAgeSeconds: ctx.config.INITDATA_MAX_AGE_SECONDS,
+    now,
+  })
+  const tg = verified.ok ? readInitDataUser(verified.fields) : null
+
+  const refuse = async (kind: string, details: Record<string, unknown> = {}): Promise<never> => {
     await recordSecurityEvent(ctx.db, ctx.log, {
       severity: 'high',
       category: 'admin',
-      kind: 'admin_access_jwt_invalid',
-      ...pick(requestMeta(ctx, req)),
-      details: { reason: error instanceof Error ? error.message : String(error) },
+      kind,
+      ipHash: meta.ipHash,
+      route: meta.route,
+      requestId: meta.requestId,
+      details: { telegramId: tg?.id ?? null, ...details },
       actionTaken: 'blocked',
     })
-    throw new HttpError('AUTH_INVALID', 'Your Cloudflare Access sign-in is not valid. Reload the page.')
-  }
-}
-
-function pick(m: ReturnType<typeof requestMeta>) {
-  return { ipHash: m.ipHash, route: m.route, requestId: m.requestId }
-}
-
-/* Login / logout ------------------------------------------------------------- */
-
-const LOGIN_FAILED = 'Email, password or code is wrong.'
-
-export async function login(ctx: AppContext, req: Request, res: Response): Promise<AdminUserRow> {
-  const body = adminLoginBody.parse(req.body)
-  const meta = requestMeta(ctx, req)
-  const viaAccess = await accessEmail(ctx, req)
-  const [admin] = await ctx.db.select().from(adminUsers).where(eq(adminUsers.email, body.email))
-  const now = ctx.now()
-
-  const fail = async (kind: string, adminId: string | null, locked = false) => {
-    await recordSecurityEvent(ctx.db, ctx.log, {
-      severity: locked ? 'high' : 'medium',
-      category: 'admin',
-      kind,
-      ...pick(meta),
-      details: { email: body.email, adminId },
-      actionTaken: locked ? 'blocked' : 'none',
-    })
-    throw new HttpError('AUTH_INVALID', LOGIN_FAILED)
+    await auditLogin(ctx, { adminId: null, action: 'admin.login.ticket_refused', telegramId: tg?.id ?? 0, details: { kind }, ipHash: meta.ipHash })
+    throw new HttpError('AUTH_INVALID', 'This admin link has expired or was already used. Send the admin command to the bot again.')
   }
 
-  if (!admin || admin.status !== 'active') {
-    dummyHash ??= argonHash('not-a-real-password')
-    await argonVerify(await dummyHash, body.password).catch(() => false)
-    return fail(admin ? 'admin_login_disabled' : 'admin_login_unknown_email', admin?.id ?? null)
-  }
-  if (viaAccess !== null && viaAccess !== admin.email) {
-    return fail('admin_login_access_email_mismatch', admin.id)
-  }
-  if (admin.lockedUntil && admin.lockedUntil.getTime() > now) {
-    const minutes = Math.ceil((admin.lockedUntil.getTime() - now) / 60_000)
-    throw new HttpError('RATE_LIMITED', `Too many failed attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`)
-  }
+  if (!tg) return refuse(verified.ok ? 'admin_ticket_no_user' : `admin_ticket_initdata_${verified.reason}`)
 
-  const passwordOk = await argonVerify(admin.passwordHash, body.password).catch(() => false)
-  const secret = decrypt(admin.totpSecretEnc, parseDataKey(ctx.config.ADMIN_DATA_KEY))
-  const step = passwordOk ? verifyTotp(secret, body.code, now, admin.totpLastStep) : null
-  if (!passwordOk || step === null) {
-    const failed = admin.failedLogins + 1
-    const lock = failed >= MAX_FAILED
-    await ctx.db
-      .update(adminUsers)
-      .set({
-        failedLogins: lock ? 0 : failed,
-        lockedUntil: lock ? new Date(now + LOCK_MINUTES * 60_000) : admin.lockedUntil,
-        updatedAt: sql`now()`,
-      })
-      .where(eq(adminUsers.id, admin.id))
-    return fail(passwordOk ? 'admin_login_bad_code' : 'admin_login_bad_password', admin.id, lock)
-  }
-
-  const token = newRefreshToken()
-  await ctx.db.transaction(async (tx) => {
-    await tx
-      .update(adminUsers)
-      .set({ failedLogins: 0, lockedUntil: null, totpLastStep: step, lastLoginAt: new Date(now), updatedAt: sql`now()` })
-      .where(eq(adminUsers.id, admin.id))
+  const result = await ctx.db.transaction(async (tx) => {
+    const [t] = await tx.select().from(adminTickets).where(eq(adminTickets.tokenHash, sha256Hex(body.ticket))).for('update')
+    if (!t) return { kind: 'unknown' as const }
+    if (t.usedAt) return { kind: 'reused' as const }
+    if (t.expiresAt.getTime() <= now) return { kind: 'expired' as const }
+    if (t.telegramId !== tg.id) return { kind: 'other_account' as const, ticketTelegramId: t.telegramId }
+    const [admin] = await tx.select().from(adminUsers).where(eq(adminUsers.id, t.adminId))
+    if (!admin || admin.status !== 'active' || admin.telegramId !== tg.id) return { kind: 'admin_unavailable' as const }
+    await tx.update(adminTickets).set({ usedAt: new Date(now) }).where(eq(adminTickets.id, t.id))
+    const token = newRefreshToken()
+    const expiresAt = now + ctx.config.ADMIN_SESSION_HOURS * 3_600_000
     await tx.insert(adminSessions).values({
       adminId: admin.id,
       tokenHash: sha256Hex(token),
       ipHash: meta.ipHash,
       userAgent: req.get('user-agent')?.slice(0, 400) ?? null,
-      expiresAt: new Date(now + ctx.config.ADMIN_SESSION_HOURS * 3_600_000),
+      expiresAt: new Date(expiresAt),
     })
-    await appendAudit(tx, { adminId: admin.id, action: 'admin.login', targetType: 'admin', targetId: admin.id, ipHash: meta.ipHash })
+    await appendAudit(tx, {
+      adminId: admin.id,
+      action: 'admin.session.start',
+      targetType: 'admin',
+      targetId: admin.id,
+      after: { telegramId: tg.id },
+      ipHash: meta.ipHash,
+    })
+    return { kind: 'ok' as const, admin, token, expiresAt }
   })
-  res.cookie(ADMIN_COOKIE, token, { ...cookieOptions(ctx), maxAge: ctx.config.ADMIN_SESSION_HOURS * 3_600_000 })
-  return admin
+
+  if (result.kind !== 'ok') {
+    return refuse(`admin_ticket_${result.kind}`, 'ticketTelegramId' in result ? { ticketTelegramId: result.ticketTelegramId } : {})
+  }
+  return { admin: result.admin, token: result.token, expiresAt: result.expiresAt }
 }
 
-export async function logout(ctx: AppContext, req: Request, res: Response): Promise<void> {
+export async function logout(ctx: AppContext, req: Request): Promise<void> {
   const { user, sessionId } = adminOf(req)
   await ctx.db.transaction(async (tx) => {
     await tx.update(adminSessions).set({ revokedAt: sql`now()` }).where(eq(adminSessions.id, sessionId))
-    await appendAudit(tx, { adminId: user.id, action: 'admin.logout', targetType: 'admin', targetId: user.id })
+    await appendAudit(tx, { adminId: user.id, action: 'admin.session.end', targetType: 'admin', targetId: user.id })
   })
-  res.clearCookie(ADMIN_COOKIE, cookieOptions(ctx))
 }
 
 /* Middleware ----------------------------------------------------------------- */
 
-/** Cookie session + Access identity + CSRF header on writes. */
 export function requireAdmin(ctx: AppContext): RequestHandler {
   return async (req, _res, next) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD' && req.get(CSRF_HEADER) !== '1') {
-      await recordSecurityEvent(ctx.db, ctx.log, {
-        severity: 'high',
-        category: 'admin',
-        kind: 'admin_csrf_header_missing',
-        ...pick(requestMeta(ctx, req)),
-        actionTaken: 'blocked',
-      })
-      throw new HttpError('AUTH_INVALID', 'Request refused: missing admin header.')
-    }
-    const viaAccess = await accessEmail(ctx, req)
-    const token = readCookie(req, ADMIN_COOKIE)
-    if (!token) throw new HttpError('AUTH_INVALID', 'Sign in to the admin.')
+    const header = req.get('authorization') ?? ''
+    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
+    if (!token) throw new HttpError('AUTH_INVALID', 'Unlock the admin from the bot first.')
     const now = ctx.now()
     const [row] = await ctx.db
       .select({ session: adminSessions, admin: adminUsers })
@@ -224,19 +195,9 @@ export function requireAdmin(ctx: AppContext): RequestHandler {
           gt(adminSessions.lastSeenAt, new Date(now - ctx.config.ADMIN_IDLE_MINUTES * 60_000)),
         ),
       )
-    if (!row || row.admin.status !== 'active') throw new HttpError('AUTH_INVALID', 'Your admin session has ended. Sign in again.')
-    if (viaAccess !== null && viaAccess !== row.admin.email) {
-      await recordSecurityEvent(ctx.db, ctx.log, {
-        severity: 'critical',
-        category: 'admin',
-        kind: 'admin_session_access_email_mismatch',
-        ...pick(requestMeta(ctx, req)),
-        details: { adminId: row.admin.id },
-        actionTaken: 'blocked',
-      })
-      throw new HttpError('AUTH_INVALID', 'This session belongs to a different admin.')
+    if (!row || row.admin.status !== 'active') {
+      throw new HttpError('AUTH_INVALID', 'Your admin session has ended. Unlock it from the bot again.')
     }
-    // Idle timeout: touch at most once a minute
     if (now - row.session.lastSeenAt.getTime() > 60_000) {
       await ctx.db.update(adminSessions).set({ lastSeenAt: new Date(now) }).where(eq(adminSessions.id, row.session.id))
     }
@@ -245,15 +206,45 @@ export function requireAdmin(ctx: AppContext): RequestHandler {
   }
 }
 
+/**
+ * Full audit trail: every admin request, reads included, is appended to the
+ * audit log once the response is sent (method, route, status, query keys).
+ * Writes additionally log their own before/after record.
+ */
+export function auditEveryRequest(ctx: AppContext): RequestHandler {
+  return (req, res, next) => {
+    res.on('finish', () => {
+      const admin = req.admin?.user
+      const route = `${req.method} ${req.baseUrl}${req.route?.path ?? req.path}`
+      void ctx.db
+        .transaction((tx) =>
+          appendAudit(tx, {
+            adminId: admin?.id ?? null,
+            action: 'admin.request',
+            targetType: 'route',
+            targetId: route,
+            after: { status: res.statusCode, params: req.params, queryKeys: Object.keys(req.query) },
+            ipHash: requestMeta(ctx, req).ipHash,
+          }),
+        )
+        .catch((error: unknown) => ctx.log.error({ err: error, route }, 'could not audit admin request'))
+    })
+    next()
+  }
+}
+
 export function requirePermission(ctx: AppContext, permission: Permission): RequestHandler {
   return async (req: Request, _res: Response, next: NextFunction) => {
     const { user } = adminOf(req)
     if (!can(user.role, permission)) {
+      const meta = requestMeta(ctx, req)
       await recordSecurityEvent(ctx.db, ctx.log, {
         severity: 'medium',
         category: 'admin',
         kind: 'admin_forbidden',
-        ...pick(requestMeta(ctx, req)),
+        ipHash: meta.ipHash,
+        route: meta.route,
+        requestId: meta.requestId,
         details: { adminId: user.id, role: user.role, permission },
         actionTaken: 'blocked',
       })

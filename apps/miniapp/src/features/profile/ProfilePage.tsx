@@ -11,7 +11,9 @@ import { formatPhoneDisplay } from '@/services/format'
 import { sound } from '@/services/sound'
 import { useAppStore, useMyWins } from '@/store/useAppStore'
 import { SectionCard } from './SectionCard'
-import { AddressSection, ContactSection, DemoControls, PersonalInfoSection, VerificationBadge, VerificationSection } from './sections'
+import { ContactSection, DemoControls, PersonalInfoSection } from './sections'
+import { cn } from '@/components/ui/cn'
+import { useAdminSession } from '@/features/admin/adminSession'
 
 /** Profile hub: identity, address, verification, contact, history links, settings. */
 export function ProfilePage() {
@@ -47,36 +49,34 @@ export function ProfilePage() {
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-[20px] font-bold">{profile.fullName}</h1>
           <p className="truncate text-[13px] text-mist">@{profile.username}</p>
-          <div className="mt-1.5">
-            <VerificationBadge status={profile.verification.status} />
-          </div>
+          <p className={cn('mt-1.5 inline-flex items-center gap-1 text-[12px] font-bold', profile.kycComplete ? 'text-mint' : 'text-sun')}>
+            <ShieldCheck size={14} /> {profile.kycComplete ? 'Ready to receive prizes' : 'Delivery details needed for prizes'}
+          </p>
         </div>
       </motion.header>
 
+      {profile.isAdmin && <AdminEntry />}
+
       <motion.div variants={popIn} className="flex flex-col gap-3">
-        <SectionCard id="personal" icon={<UserRound size={20} />} title="Personal info" summary={`${formatPhoneDisplay(profile.phone)} · ${profile.email}`} open={open === 'personal'} onToggle={toggle}>
-          <PersonalInfoSection key={profile.username + profile.phone + profile.email + profile.fullName} profile={profile} />
+        <SectionCard id="personal" icon={<UserRound size={20} />} title="Personal info" summary={`@${profile.username}${profile.phone ? ` · ${formatPhoneDisplay(profile.phone)}` : ''}`} open={open === 'personal'} onToggle={toggle}>
+          <PersonalInfoSection key={profile.username + profile.fullName} profile={profile} />
         </SectionCard>
-        <SectionCard
-          id="address"
-          icon={<MapPin size={20} />}
-          title="Delivery address"
-          summary={profile.address ? `${profile.address.street}, ${profile.address.city}, ${profile.address.state}` : 'Add where prizes should be delivered'}
-          open={open === 'address'}
-          onToggle={toggle}
+        <Link
+          to="/kyc"
+          onClick={() => sound.play('click')}
+          className="tap surface flex items-center gap-3 rounded-card p-4"
         >
-          <AddressSection profile={profile} />
-        </SectionCard>
-        <SectionCard
-          id="verification"
-          icon={<ShieldCheck size={20} />}
-          title="Identity verification"
-          summary={profile.verification.status === 'verified' ? 'Verified' : profile.verification.status === 'pending' ? 'Pending review' : 'Required before prizes are released'}
-          open={open === 'verification'}
-          onToggle={toggle}
-        >
-          <VerificationSection key={profile.verification.status} profile={profile} />
-        </SectionCard>
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/8 text-mist">
+            <MapPin size={20} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-bold">Prize delivery (KYC)</span>
+            <span className="block truncate text-[13px] text-mist">
+              {profile.delivery ? `${profile.delivery.motorPark}, ${profile.delivery.city}` : 'Your name, phone and nearest motor park'}
+            </span>
+          </span>
+          <ChevronRight size={18} className="text-haze" />
+        </Link>
         <SectionCard id="contact" icon={<Bell size={20} />} title="Contact info" summary="Where we reach you about draws and deliveries" open={open === 'contact'} onToggle={toggle}>
           <ContactSection profile={profile} />
         </SectionCard>
@@ -108,7 +108,7 @@ export function ProfilePage() {
       {!usingRealApi && (
         <motion.div variants={popIn}>
           <SectionCard id="demo" icon={<Wrench size={20} />} title="Demo controls" summary="Testing switches. Not part of the real product." open={open === 'demo'} onToggle={toggle}>
-            <DemoControls profile={profile} />
+            <DemoControls />
           </SectionCard>
         </motion.div>
       )}
@@ -117,5 +117,27 @@ export function ProfilePage() {
         <AboutSoftware />
       </motion.div>
     </motion.div>
+  )
+}
+
+/**
+ * Shown to admin accounts only. It opens nothing by itself: the admin screen
+ * needs a sign-in through the bot (hidden command, master password, username,
+ * password), which returns an "Open admin" button.
+ */
+function AdminEntry() {
+  const navigate = useNavigate()
+  const unlocked = useAdminSession((s) => s.token !== null)
+  return (
+    <motion.section variants={popIn} className="rounded-card border border-white/20 bg-white p-4 text-black">
+      <p className="text-[15px] font-bold">Admin</p>
+      {unlocked ? (
+        <button type="button" onClick={() => navigate('/admin')} className="mt-2 w-full rounded-lg bg-black py-2.5 text-[14px] font-bold text-white">
+          Open the admin screen
+        </button>
+      ) : (
+        <p className="mt-1 text-[13px]">Locked. Sign in from the bot chat with the admin command; the bot replies with an Open admin button.</p>
+      )}
+    </motion.section>
   )
 }

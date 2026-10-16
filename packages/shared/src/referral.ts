@@ -42,5 +42,5 @@ export function parseStartParam(raw: string | null | undefined): StartParam | nu
 }
 
 export function referralLink(botUsername: string, code: string): string {
-  return `https://t.me/${botUsername.replace(/^@/, '')}/app?startapp=ref_${code}`
+  return `https://t.me/${botUsername.replace(/^@/, '')}?startapp=ref_${code}`
 }

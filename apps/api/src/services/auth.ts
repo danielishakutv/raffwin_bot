@@ -5,7 +5,7 @@
  * with a 30-day rotating refresh token and a 15-minute access token.
  */
 import { and, eq, isNull, sql } from 'drizzle-orm'
-import { parseStartParam } from '@raffwin/shared'
+import { parseStartParam, USERNAME_RE } from '@raffwin/shared'
 import type { AppContext, RequestMeta } from '../context'
 import { uniqueViolation } from '../db/client'
 import { initDataUses, sessions, users, type UserRow } from '../db/schema'
@@ -60,7 +60,7 @@ export async function loginWithInitData(ctx: AppContext, initData: string, meta:
   await checkReplay(ctx, initData, tgUser.id, verified.authDate, meta)
 
   const start = parseStartParam(verified.fields.get('start_param'))
-  const user = await upsertTelegramUser(ctx, tgUser, start?.kind === 'referral' ? start.code : null)
+  const user = await upsertTelegramUser(ctx, tgUser, start?.kind === 'referral' ? start.code : null, meta)
 
   if (user.status !== 'active') {
     await recordSecurityEvent(ctx.db, ctx.log, {
@@ -112,53 +112,125 @@ async function checkReplay(ctx: AppContext, initData: string, telegramId: number
   }
 }
 
+/** Telegram's username when it fits ours (3-20 of a-z 0-9 _), else null. */
+function usernameFromTelegram(tg: InitDataUser): string | null {
+  const u = tg.username?.toLowerCase() ?? ''
+  return USERNAME_RE.test(u) ? u : null
+}
+
+function generatedUsername(): string {
+  return `player_${newReferralCode().toLowerCase().slice(0, 6)}`
+}
+
+function displayName(tg: InitDataUser): string {
+  return [tg.first_name, tg.last_name].filter(Boolean).join(' ').trim().slice(0, 120) || 'Raffle Win player'
+}
+
 /**
- * Finds or creates the user. The referral code from the first open(s) is kept
- * until sign-up (first touch wins) and never changes after it.
+ * Finds or creates the player. There is no sign-up form: opening the bot is
+ * the account (decision of 16 Oct). A new account gets its Telegram username
+ * (or player_xxxxxx if that is missing, invalid or taken), its Telegram name,
+ * and the referrer from the link it was first opened with. The referral bond
+ * is set once, at creation, and never changes.
  */
 async function upsertTelegramUser(
   ctx: AppContext,
   tg: InitDataUser,
   referralCode: string | null,
+  meta: RequestMeta,
 ): Promise<UserRow> {
+  const now = new Date(ctx.now())
   const telegramFields = {
     tgUsername: tg.username ?? null,
     tgFirstName: tg.first_name ?? null,
     tgLastName: tg.last_name ?? null,
     tgLanguageCode: tg.language_code ?? null,
     tgIsPremium: tg.is_premium === true,
+    lastSeenAt: now,
   }
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+
+  const [existing] = await ctx.db.select().from(users).where(eq(users.telegramId, tg.id))
+  if (existing) return refreshExisting(ctx, existing, tg, telegramFields)
+
+  const referrerId = referralCode ? await referrerFor(ctx, referralCode, meta) : null
+  let username = usernameFromTelegram(tg) ?? generatedUsername()
+  let code = newReferralCode()
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     try {
       const [row] = await ctx.db
         .insert(users)
         .values({
           telegramId: tg.id,
           ...telegramFields,
-          referralCode: newReferralCode(),
-          pendingReferralCode: referralCode,
-          lastSeenAt: new Date(ctx.now()),
-        })
-        .onConflictDoUpdate({
-          target: users.telegramId,
-          set: {
-            ...telegramFields,
-            lastSeenAt: new Date(ctx.now()),
-            updatedAt: sql`now()`,
-            pendingReferralCode: sql`case when ${users.signedUpAt} is null
-              then coalesce(${users.pendingReferralCode}, excluded.pending_referral_code)
-              else ${users.pendingReferralCode} end`,
-          },
+          username,
+          fullName: displayName(tg),
+          referralCode: code,
+          referredByUserId: referrerId,
+          referredAt: referrerId ? now : null,
+          signedUpAt: now,
         })
         .returning()
       if (row) return row
     } catch (error) {
-      // A fresh referral code collided with an existing one: draw another
-      if (uniqueViolation(error) === 'users_referral_code_key') continue
+      const constraint = uniqueViolation(error)
+      if (constraint === 'users_username_key') username = generatedUsername()
+      else if (constraint === 'users_referral_code_key') code = newReferralCode()
+      else if (constraint === 'users_telegram_id_key') {
+        // Two first opens raced; the other one created the row
+        const [row] = await ctx.db.select().from(users).where(eq(users.telegramId, tg.id))
+        if (row) return row
+      } else throw error
+    }
+  }
+  throw new Error(`could not create an account for telegram ${tg.id} after 8 attempts`)
+}
+
+/** Keeps Telegram details current; fills the profile of accounts made before sign-up was removed. */
+async function refreshExisting(
+  ctx: AppContext,
+  user: UserRow,
+  tg: InitDataUser,
+  telegramFields: Partial<typeof users.$inferInsert>,
+): Promise<UserRow> {
+  const backfill = user.signedUpAt
+    ? {}
+    : { signedUpAt: new Date(ctx.now()), fullName: user.fullName ?? displayName(tg), username: user.username ?? usernameFromTelegram(tg) ?? generatedUsername() }
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const [row] = await ctx.db
+        .update(users)
+        .set({ ...telegramFields, ...backfill, updatedAt: sql`now()` })
+        .where(eq(users.id, user.id))
+        .returning()
+      if (row) return row
+    } catch (error) {
+      if (uniqueViolation(error) === 'users_username_key' && 'username' in backfill) {
+        backfill.username = generatedUsername()
+        continue
+      }
       throw error
     }
   }
-  throw new Error('could not allocate a unique referral code in 5 attempts')
+  throw new Error(`could not update account ${user.id}`)
+}
+
+/** A referral code counts only if it belongs to an active account; otherwise it is recorded and ignored. */
+async function referrerFor(ctx: AppContext, code: string, meta: RequestMeta): Promise<string | null> {
+  const [referrer] = await ctx.db
+    .select({ id: users.id, status: users.status })
+    .from(users)
+    .where(eq(users.referralCode, code))
+  if (referrer && referrer.status === 'active') return referrer.id
+  await recordSecurityEvent(ctx.db, ctx.log, {
+    severity: 'low',
+    category: 'fraud',
+    kind: referrer ? 'referral_inactive_referrer' : 'referral_unknown_code',
+    ipHash: meta.ipHash,
+    route: meta.route,
+    requestId: meta.requestId,
+    details: { code },
+  })
+  return null
 }
 
 async function createSession(ctx: AppContext, userId: string, familyId: string, meta: RequestMeta): Promise<SessionTokens> {

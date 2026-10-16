@@ -5,13 +5,12 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import {
-  addressBody,
   contactPrefsBody,
   cursorQuery,
   enterRaffleBody,
   profilePatchBody,
+  kycBody,
   refreshBody,
-  signUpBody,
   telegramAuthBody,
   usernameQuery,
 } from '@raffwin/shared/schemas'
@@ -66,9 +65,9 @@ export function v1Routes(ctx: AppContext): Router {
     res.json({ available: await account.isUsernameAvailable(ctx, normalised, me(req).id) })
   })
 
-  router.post('/signup', authed, async (req, res) => {
-    const body = signUpBody.parse(req.body)
-    res.status(201).json(await account.signUp(ctx, me(req), body, requestMeta(ctx, req)))
+  // KYC: name, Telegram-verified phone and the motor park to deliver prizes to
+  router.put('/kyc', authed, async (req, res) => {
+    res.json(await account.saveKyc(ctx, me(req), kycBody.parse(req.body), requestMeta(ctx, req)))
   })
 
   router.post('/onboarding/complete', authed, async (req, res) => {
@@ -81,10 +80,6 @@ export function v1Routes(ctx: AppContext): Router {
 
   router.patch('/profile', authed, async (req, res) => {
     res.json(await account.updateProfile(ctx, me(req), profilePatchBody.parse(req.body)))
-  })
-
-  router.put('/profile/address', authed, async (req, res) => {
-    res.json(await account.updateAddress(ctx, me(req), addressBody.parse(req.body)))
   })
 
   router.put('/profile/contact-prefs', authed, async (req, res) => {

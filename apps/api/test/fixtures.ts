@@ -52,28 +52,42 @@ export interface Member {
   referralCode: string
   get: (path: string) => supertest.Test
   post: (path: string, body?: object) => supertest.Test
+  put: (path: string, body: object) => supertest.Test
+  patch: (path: string, body: object) => supertest.Test
 }
 
-/** Signs in with fresh initData and completes sign-up. */
-export async function member(http: Http, opts: { startParam?: string } = {}): Promise<Member> {
+/** Opens the app with fresh initData: that alone creates the account (no sign-up form). */
+export async function member(http: Http, opts: { startParam?: string; username?: string } = {}): Promise<Member> {
   const id = telegramId()
-  const auth = await http.post('/v1/auth/telegram').send({ initData: initData({ id }, { startParam: opts.startParam }) })
+  const username = opts.username ?? uniqueUsername()
+  const auth = await http
+    .post('/v1/auth/telegram')
+    .send({ initData: initData({ id, username, first_name: 'Ada' }, { startParam: opts.startParam }) })
   expect(auth.status, JSON.stringify(auth.body)).toBe(200)
   const token = auth.body.accessToken as string
-  const username = uniqueUsername()
-  const signed = await http
-    .post('/v1/signup')
-    .set('authorization', `Bearer ${token}`)
-    .send({ fullName: 'Ada Obi', username, email: 'a@b.co', contactProof: contactProof(id, nigerianPhone().slice(1)) })
-  expect(signed.status, JSON.stringify(signed.body)).toBe(201)
-  const profile = (signed.body as Bootstrap).profile
-  if (!profile) throw new Error('sign-up returned no profile')
+  const boot = await http.get('/v1/bootstrap').set('authorization', `Bearer ${token}`)
+  const profile = (boot.body as Bootstrap).profile
+  if (!profile) throw new Error('first open returned no profile')
   return {
     userId: profile.id,
     telegramId: id,
-    username,
+    username: profile.username,
     referralCode: profile.referralCode,
     get: (path) => http.get(path).set('authorization', `Bearer ${token}`),
     post: (path, body) => http.post(path).set('authorization', `Bearer ${token}`).send(body),
+    put: (path, body) => http.put(path).set('authorization', `Bearer ${token}`).send(body),
+    patch: (path, body) => http.patch(path).set('authorization', `Bearer ${token}`).send(body),
+  }
+}
+
+/** A valid KYC body with a fresh, Telegram-signed phone share for this member. */
+export function kyc(m: Pick<Member, 'telegramId'>, overrides: Record<string, unknown> = {}) {
+  return {
+    fullName: 'Ada Obi',
+    state: 'Lagos',
+    city: 'Ikeja',
+    motorPark: 'Ojota Motor Park',
+    contactProof: contactProof(m.telegramId, nigerianPhone().slice(1)),
+    ...overrides,
   }
 }

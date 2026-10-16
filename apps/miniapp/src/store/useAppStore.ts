@@ -9,11 +9,10 @@ import { persist } from 'zustand/middleware'
 import * as api from '@/api'
 import type {
   ContactPrefs,
-  DeliveryAddress,
   Entry,
   Profile,
   Raffle,
-  SignUpInput,
+  KycInput,
   Transaction,
   VerificationStatus,
   WinnerSlot,
@@ -44,7 +43,7 @@ export interface AppState {
   settings: Settings
 
   boot: () => Promise<void>
-  signUp: (input: SignUpInput) => Promise<void>
+  saveKyc: (input: KycInput) => Promise<void>
   completeOnboarding: () => Promise<void>
   refreshRate: () => Promise<void>
   /** Called every second by the rate lifecycle hook. */
@@ -57,7 +56,6 @@ export interface AppState {
   drawRaffle: (raffleId: string) => Promise<{ raffle: Raffle; youWon: boolean }>
   buyRaffs: (req: Omit<api.BuyRaffsRequest, 'rateId'>) => Promise<api.BuyRaffsResponse>
   updateProfile: (patch: Partial<Pick<Profile, 'fullName' | 'phone' | 'email' | 'username'>>) => Promise<void>
-  updateAddress: (address: DeliveryAddress) => Promise<void>
   updateContactPrefs: (prefs: ContactPrefs) => Promise<void>
   submitVerification: (input: { idImage: string; selfieImage: string }) => Promise<void>
   setVerificationStatus: (status: VerificationStatus) => Promise<void>
@@ -97,9 +95,9 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      async signUp(input) {
-        const data = await api.signUp(input)
-        set({ ...data })
+      async saveKyc(input) {
+        const profile = await api.saveKyc(input)
+        set({ profile })
       },
 
       async completeOnboarding() {
@@ -188,10 +186,6 @@ export const useAppStore = create<AppState>()(
         set({ profile })
       },
 
-      async updateAddress(address) {
-        const profile = await api.updateAddress(address)
-        set({ profile })
-      },
 
       async updateContactPrefs(prefs) {
         const profile = await api.updateContactPrefs(prefs)

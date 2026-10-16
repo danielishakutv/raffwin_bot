@@ -194,7 +194,7 @@ describe('referral earnings', () => {
     const summary = (await referrer.get('/v1/referrals/summary')).body as ReferralSummary
     expect(summary).toMatchObject({
       code: referrer.referralCode,
-      link: `https://t.me/raffwin_test_bot/app?startapp=ref_${referrer.referralCode}`,
+      link: `https://t.me/raffwin_test_bot?startapp=ref_${referrer.referralCode}`,
       peopleReferred: 1,
       activeThisMonth: 1,
       lifetimeRaffs: 17,

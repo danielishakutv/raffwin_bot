@@ -2,7 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
 import { RequireOnboarded, RequireProfile } from './guards'
 import { SplashPage } from '@/features/splash/SplashPage'
-import { SignUpPage } from '@/features/auth/SignUpPage'
+import { KycPage } from '@/features/kyc/KycPage'
+import { AdminScreen } from '@/features/admin/AdminScreen'
 import { OnboardingPage } from '@/features/onboarding/OnboardingPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { RafflesPage } from '@/features/raffles/RafflesPage'
@@ -32,7 +33,9 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<SplashPage />} />
-      <Route path="/signup" element={<SignUpPage />} />
+      {/* There is no sign-up: opening the bot is the account. Old links land on the splash. */}
+      <Route path="/signup" element={<Navigate to="/" replace />} />
+      <Route path="/admin/*" element={<AdminScreen />} />
       <Route
         path="/onboarding"
         element={
@@ -57,6 +60,7 @@ export function AppRoutes() {
         <Route path="/profile/entries" element={<EntriesPage />} />
         <Route path="/profile/wins" element={<WinsPage />} />
         <Route path="/referrals" element={<ReferralsPage />} />
+        <Route path="/kyc" element={<KycPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

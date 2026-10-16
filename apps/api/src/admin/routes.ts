@@ -24,7 +24,8 @@ import { decide, listApprovals, requestApproval } from './approvals'
 import { verifyChain } from './audit'
 import * as ops from './operations'
 import { permissionsOf } from './permissions'
-import { adminOf, login, logout, requireAdmin, requirePermission } from './session'
+import { adminOf, auditEveryRequest, exchangeTicket, logout, requireAdmin, requirePermission } from './session'
+import * as admins from './admins'
 
 const uuid = z.string().uuid()
 
@@ -34,9 +35,12 @@ function idParam(req: Request): string {
   return parsed.data
 }
 
+function toMe(user: ReturnType<typeof adminOf>['user']): AdminMe {
+  return { id: user.id, name: user.name, telegramId: user.telegramId, role: user.role, permissions: permissionsOf(user.role) }
+}
+
 function me(req: Request): AdminMe {
-  const { user } = adminOf(req)
-  return { id: user.id, email: user.email, name: user.name, role: user.role, permissions: permissionsOf(user.role) }
+  return toMe(adminOf(req).user)
 }
 
 export function adminRoutes(ctx: AppContext): Router {
@@ -47,12 +51,16 @@ export function adminRoutes(ctx: AppContext): Router {
 
   /* Session ---------------------------------------------------------------- */
 
-  r.post('/auth/login', async (req, res) => {
-    const admin = await login(ctx, req, res)
-    res.json({ id: admin.id, email: admin.email, name: admin.name, role: admin.role, permissions: permissionsOf(admin.role) })
+  // Every admin request, reads included, goes to the audit log
+  r.use(auditEveryRequest(ctx))
+
+  // One-time ticket from the bot's admin sign-in + this Mini App's initData -> bearer token
+  r.post('/auth/ticket', async (req, res) => {
+    const { admin, token, expiresAt } = await exchangeTicket(ctx, req)
+    res.json({ token, expiresAt, admin: toMe(admin) })
   })
   r.post('/auth/logout', authed, async (req, res) => {
-    await logout(ctx, req, res)
+    await logout(ctx, req)
     res.status(204).end()
   })
   r.get('/me', authed, (req, res) => {
@@ -166,6 +174,24 @@ export function adminRoutes(ctx: AppContext): Router {
   r.post('/approvals/:id/reject', authed, perm('approvals.decide'), async (req, res) => {
     const { note } = decisionBody.parse(req.body ?? {})
     res.json(await decide(ctx, adminId(req), idParam(req), 'reject', note))
+  })
+
+  /* Admins (super_admin) ---------------------------------------------------- */
+
+  r.get('/admins', authed, perm('admins.manage'), async (_req, res) => {
+    res.json(await admins.list(ctx))
+  })
+  r.post('/admins', authed, perm('admins.manage'), async (req, res) => {
+    res.status(201).json(await admins.create(ctx, adminId(req), admins.createBody.parse(req.body)))
+  })
+  r.post('/admins/:id/reset-password', authed, perm('admins.manage'), async (req, res) => {
+    res.json(await admins.resetPassword(ctx, adminId(req), idParam(req)))
+  })
+  r.post('/admins/:id/disable', authed, perm('admins.manage'), async (req, res) => {
+    res.json(await admins.setStatus(ctx, adminId(req), idParam(req), 'disabled'))
+  })
+  r.post('/admins/:id/enable', authed, perm('admins.manage'), async (req, res) => {
+    res.json(await admins.setStatus(ctx, adminId(req), idParam(req), 'active'))
   })
 
   /* Security and audit ----------------------------------------------------- */

@@ -12,18 +12,18 @@ function Booting() {
   )
 }
 
-/** Redirects to sign-up until a profile exists. */
+/** Waits for the account (created on first open; there is no sign-up). */
 export function RequireProfile({ children }: { children: ReactNode }) {
   const booted = useAppStore((s) => s.booted)
   const bootError = useAppStore((s) => s.bootError)
   const profile = useAppStore((s) => s.profile)
   if (bootError) return <Navigate to="/" replace />
   if (!booted) return <Booting />
-  if (!profile) return <Navigate to="/signup" replace />
+  if (!profile) return <Navigate to="/" replace />
   return children
 }
 
-/** Redirects to sign-up / onboarding until both are done. */
+/** Sends a first-time player through onboarding (welcome, how it works, rules) first. */
 export function RequireOnboarded({ children }: { children: ReactNode }) {
   const booted = useAppStore((s) => s.booted)
   const bootError = useAppStore((s) => s.bootError)
@@ -31,7 +31,7 @@ export function RequireOnboarded({ children }: { children: ReactNode }) {
   const onboardingComplete = useAppStore((s) => s.onboardingComplete)
   if (bootError) return <Navigate to="/" replace />
   if (!booted) return <Booting />
-  if (!profile) return <Navigate to="/signup" replace />
+  if (!profile) return <Navigate to="/" replace />
   if (!onboardingComplete) return <Navigate to="/onboarding" replace />
   return children
 }

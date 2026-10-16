@@ -136,12 +136,15 @@ export interface Page<T> {
   nextCursor: string | null
 }
 
-export interface DeliveryAddress {
-  street: string
-  city: string
+/**
+ * Where a winner collects a physical prize: their city and the nearest motor
+ * park. Never a house address (security decision of 16 Oct).
+ */
+export interface DeliveryPoint {
   state: string
-  landmark: string
-  phone: string
+  city: string
+  /** e.g. "Jibowu Motor Park" */
+  motorPark: string
 }
 
 export type VerificationStatus = 'unverified' | 'pending' | 'verified'
@@ -161,37 +164,47 @@ export interface ContactPrefs {
   email: boolean
 }
 
+/**
+ * A player. There is no sign-up: the account exists from the first open of
+ * the bot, with the Telegram name and username. Phone and delivery point are
+ * given only on the KYC page, when a prize needs delivering.
+ */
 export interface Profile {
   id: string
   fullName: string
   username: string
-  /** Normalised E.164 Nigerian number, e.g. +2348031234567 */
-  phone: string
+  /** Normalised E.164 Nigerian number from Telegram's contact share, or null before KYC */
+  phone: string | null
   /** True when the number came from Telegram's contact share, not typed in */
   phoneVerified: boolean
-  email: string
+  email: string | null
   createdAt: string
   telegramId: number | null
   /** This user's own code, used in https://t.me/<bot>/app?startapp=ref_<code> */
   referralCode: string
-  address: DeliveryAddress | null
+  delivery: DeliveryPoint | null
+  /** Name, verified phone and delivery point all given: prizes can be released */
+  kycComplete: boolean
+  /** Shows the admin entry; the admin API still checks the account and a TOTP code itself */
+  isAdmin: boolean
   contactPrefs: ContactPrefs
   verification: Verification
 }
 
-export interface SignUpInput {
+/** The KYC page: who to hand the prize to, and where. */
+export interface KycInput {
   fullName: string
-  username: string
-  /** Typed number. The mock API uses it; the real API ignores it in favour of contactProof. */
-  phone: string
-  email: string
-  telegramId?: number | null
+  state: string
+  city: string
+  motorPark: string
   /**
-   * The signed `response` string Telegram returns from WebApp.requestContact.
-   * The API verifies its hash with the bot token, so the phone in it is the
-   * one Telegram holds for this account.
+   * The signed `response` string from WebApp.requestContact. The API checks
+   * its hash with the bot token, so the phone is the one Telegram holds for
+   * this account. Not needed again once the phone is verified.
    */
   contactProof?: string
+  /** Mock API only: a typed number for the demo, where Telegram cannot share one */
+  phone?: string
 }
 
 export interface RaffsPackage {

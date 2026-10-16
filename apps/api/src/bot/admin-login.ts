@@ -1,0 +1,159 @@
+/**
+ * Admin sign-in through the bot (see admin/session.ts for the whole model).
+ *
+ *   /<ADMIN_BOT_COMMAND>  ->  master password  ->  admin username  ->  admin password
+ *
+ * Private chats only. The bot deletes every message carrying a secret as soon
+ * as it has read it. One wrong answer ends the attempt with the same reply
+ * whatever was wrong; 5 failures in a row lock that Telegram account out of
+ * admin sign-in for an hour. Every step is written to the audit log.
+ */
+import { InlineKeyboard, type Bot, type Context } from 'grammy'
+import { eq, sql } from 'drizzle-orm'
+import type { AppContext } from '../context'
+import { adminLoginFlows, adminUsers } from '../db/schema'
+import { recordSecurityEvent } from '../lib/security-events'
+import { auditLogin, issueTicket, TICKET_MINUTES, verifyPassword } from '../admin/session'
+
+const STEP_MINUTES = 5
+const MAX_FAILED = 5
+const LOCK_MINUTES = 60
+const FAILED_REPLY = 'That did not work. Send the admin command again to start over.'
+
+export function installAdminLogin(bot: Bot, app: AppContext, appUrl: string): void {
+  const command = app.config.ADMIN_BOT_COMMAND
+  const masterHash = app.config.ADMIN_MASTER_PASSWORD_HASH
+  // Without a master password configured, the command does not exist at all
+  if (!masterHash) return
+
+  bot.command(command, async (ctx) => {
+    if (ctx.chat?.type !== 'private' || !ctx.from) return
+    const now = app.now()
+    const [flow] = await app.db.select().from(adminLoginFlows).where(eq(adminLoginFlows.telegramId, ctx.from.id))
+    if (flow?.lockedUntil && flow.lockedUntil.getTime() > now) {
+      await ctx.reply(FAILED_REPLY)
+      return
+    }
+    await app.db
+      .insert(adminLoginFlows)
+      .values({ telegramId: ctx.from.id, chatId: ctx.chat.id, step: 'master', expiresAt: new Date(now + STEP_MINUTES * 60_000) })
+      .onConflictDoUpdate({
+        target: adminLoginFlows.telegramId,
+        set: { chatId: ctx.chat.id, step: 'master', username: null, expiresAt: new Date(now + STEP_MINUTES * 60_000), updatedAt: sql`now()` },
+      })
+    await auditLogin(app, { adminId: null, action: 'admin.login.started', telegramId: ctx.from.id })
+    await ctx.reply('Admin sign-in. Send the master password. Each message is deleted as soon as it is read.')
+  })
+
+  // Runs before the generic message handler; passes through anything that is not part of a sign-in
+  bot.on('message:text', async (ctx, next) => {
+    if (ctx.chat.type !== 'private' || ctx.message.text.startsWith('/')) return next()
+    const now = app.now()
+    const [flow] = await app.db.select().from(adminLoginFlows).where(eq(adminLoginFlows.telegramId, ctx.from.id))
+    if (!flow || flow.step === 'idle' || flow.expiresAt.getTime() <= now) return next()
+
+    await removeSecret(app, ctx)
+    const text = ctx.message.text.trim()
+
+    if (flow.step === 'master') {
+      if (!(await verifyPassword(masterHash, text))) return fail(app, ctx, flow, 'master_password')
+      await setStep(app, ctx.from.id, 'master', 'username', null, now)
+      await ctx.reply('Admin username?')
+      return
+    }
+
+    if (flow.step === 'username') {
+      await setStep(app, ctx.from.id, 'username', 'password', text.toLowerCase().slice(0, 64), now)
+      await ctx.reply('Admin password?')
+      return
+    }
+
+    // step === 'password'
+    const [admin] = await app.db.select().from(adminUsers).where(eq(adminUsers.username, flow.username ?? ''))
+    if (!admin || admin.status !== 'active' || !(await verifyPassword(admin.passwordHash, text))) {
+      return fail(app, ctx, flow, 'username_or_password', admin?.id ?? null)
+    }
+    const tgUsername = ctx.from.username?.toLowerCase() ?? null
+    if (admin.telegramId === null) {
+      // First login binds the account, but only the one the super admin named
+      if (!admin.telegramUsername || admin.telegramUsername !== tgUsername) {
+        return fail(app, ctx, flow, 'telegram_username_mismatch', admin.id, 'critical')
+      }
+      await app.db.update(adminUsers).set({ telegramId: ctx.from.id, updatedAt: sql`now()` }).where(eq(adminUsers.id, admin.id))
+      await auditLogin(app, { adminId: admin.id, action: 'admin.telegram.bound', telegramId: ctx.from.id, details: { telegramUsername: tgUsername } })
+    } else if (admin.telegramId !== ctx.from.id) {
+      return fail(app, ctx, flow, 'wrong_telegram_account', admin.id, 'critical')
+    }
+
+    await app.db
+      .update(adminLoginFlows)
+      .set({ step: 'idle', username: null, failedCount: 0, lockedUntil: null, updatedAt: sql`now()` })
+      .where(eq(adminLoginFlows.telegramId, ctx.from.id))
+    await app.db.update(adminUsers).set({ lastLoginAt: new Date(now), failedLogins: 0, updatedAt: sql`now()` }).where(eq(adminUsers.id, admin.id))
+    const ticket = await issueTicket(app, admin.id, ctx.from.id)
+    await auditLogin(app, { adminId: admin.id, action: 'admin.login.success', telegramId: ctx.from.id })
+    const url = new URL(appUrl)
+    url.searchParams.set('admin_ticket', ticket)
+    await ctx.reply(`Signed in as ${admin.name}. The button works once, for ${TICKET_MINUTES} minutes.`, {
+      reply_markup: new InlineKeyboard().webApp('Open admin', url.toString()),
+    })
+  })
+}
+
+/** Deletes the message that carried a secret; if Telegram refuses, says so instead of leaving it silently. */
+async function removeSecret(app: AppContext, ctx: Context): Promise<void> {
+  try {
+    await ctx.deleteMessage()
+  } catch (error) {
+    app.log.warn({ err: error, telegramId: ctx.from?.id }, 'could not delete an admin sign-in message')
+    await ctx.reply('I could not delete your last message. Please delete it yourself now.')
+  }
+}
+
+async function setStep(
+  app: AppContext,
+  telegramId: number,
+  from: 'master' | 'username',
+  to: 'username' | 'password',
+  username: string | null,
+  now: number,
+): Promise<void> {
+  await app.db
+    .update(adminLoginFlows)
+    .set({ step: to, ...(from === 'username' ? { username } : {}), expiresAt: new Date(now + STEP_MINUTES * 60_000), updatedAt: sql`now()` })
+    .where(eq(adminLoginFlows.telegramId, telegramId))
+}
+
+async function fail(
+  app: AppContext,
+  ctx: Context,
+  flow: typeof adminLoginFlows.$inferSelect,
+  reason: string,
+  adminId: string | null = null,
+  severity: 'high' | 'critical' = 'high',
+): Promise<void> {
+  const telegramId = flow.telegramId
+  const failed = flow.failedCount + 1
+  const lock = failed >= MAX_FAILED
+  await app.db
+    .update(adminLoginFlows)
+    .set({
+      step: 'idle',
+      username: null,
+      failedCount: lock ? 0 : failed,
+      lockedUntil: lock ? new Date(app.now() + LOCK_MINUTES * 60_000) : flow.lockedUntil,
+      updatedAt: sql`now()`,
+    })
+    .where(eq(adminLoginFlows.telegramId, telegramId))
+  await recordSecurityEvent(app.db, app.log, {
+    severity: lock ? 'critical' : severity,
+    category: 'admin',
+    kind: `admin_bot_login_${reason}`,
+    ipHash: null,
+    route: 'bot admin sign-in',
+    details: { telegramId, telegramUsername: ctx.from?.username ?? null, adminId, failedInARow: failed },
+    actionTaken: lock ? 'blocked' : 'none',
+  })
+  await auditLogin(app, { adminId, action: 'admin.login.failed', telegramId, details: { reason, locked: lock } })
+  await ctx.reply(FAILED_REPLY)
+}

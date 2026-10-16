@@ -24,9 +24,10 @@ export function SplashPage() {
   }, [])
 
   useEffect(() => {
-    if (!minimumElapsed || !booted) return
-    const next = !profile ? '/signup' : !onboardingComplete ? '/onboarding' : '/home'
-    navigate(next, { replace: true })
+    // No profile after boot means the boot failed; the splash shows that error and stays put
+    if (!minimumElapsed || !booted || !profile) return
+    // No sign-up: the account exists from the first open of the bot
+    navigate(onboardingComplete ? '/home' : '/onboarding', { replace: true })
   }, [minimumElapsed, booted, profile, onboardingComplete, navigate])
 
   return (
