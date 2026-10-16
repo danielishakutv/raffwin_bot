@@ -130,6 +130,18 @@ export interface ReferralEarning {
   earnedRaffs: number
 }
 
+/**
+ * GET /v1/live: the small, cheap snapshot the app polls every few seconds so
+ * counts, balance and raffle states change on screen without a refresh.
+ * Anything it reveals as changed (a new raffle, a new balance) makes the app
+ * fetch the full data once.
+ */
+export interface LiveSnapshot {
+  serverTime: number
+  balance: number
+  raffles: { id: string; entriesCount: number; entriesTarget: number; status: string; deadline: string; drawnAt: string | null }[]
+}
+
 /** One page of a cursor-paginated list. nextCursor is null on the last page. */
 export interface Page<T> {
   items: T[]

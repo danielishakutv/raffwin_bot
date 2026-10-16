@@ -91,13 +91,21 @@ function useAction() {
   return { busy, error, run }
 }
 
-function useLoad<T>(path: string | null) {
+/** Loads a path; with everyMs it also reloads on a timer while the screen is visible, so figures stay live. */
+function useLoad<T>(path: string | null, everyMs?: number) {
   const [data, setData] = useState<T | null>(null)
   const { busy, error, run } = useAction()
   const reload = useCallback(() => {
     if (path) void run(() => adminCall<T>('GET', path)).then((d) => d !== undefined && setData(d))
   }, [path, run])
   useEffect(reload, [reload])
+  useEffect(() => {
+    if (!everyMs) return
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'visible') reload()
+    }, everyMs)
+    return () => window.clearInterval(id)
+  }, [everyMs, reload])
   return { data, busy, error, reload }
 }
 
@@ -169,7 +177,7 @@ export function AdminScreen() {
 /* Overview ------------------------------------------------------------------- */
 
 function OverviewTab() {
-  const { data: o, error, reload } = useLoad<AdminOverview>('/overview')
+  const { data: o, error, reload } = useLoad<AdminOverview>('/overview', 10_000)
   if (error) return <Err message={error} />
   if (!o) return <p>Loading...</p>
   const rows: [string, string][] = [
@@ -222,7 +230,7 @@ const emptyRaffle = {
 }
 
 function RafflesTab({ can }: { can: string[] }) {
-  const { data, error, reload } = useLoad<AdminRaffle[]>('/raffles')
+  const { data, error, reload } = useLoad<AdminRaffle[]>('/raffles', 15_000)
   const [form, setForm] = useState(emptyRaffle)
   const [creating, setCreating] = useState(false)
   const action = useAction()
@@ -347,7 +355,7 @@ function RafflesTab({ can }: { can: string[] }) {
 
 function ApprovalsTab({ can }: { can: string[] }) {
   const [status, setStatus] = useState('pending')
-  const { data, error, reload } = useLoad<AdminApproval[]>(`/approvals?status=${status}`)
+  const { data, error, reload } = useLoad<AdminApproval[]>(`/approvals?status=${status}`, 10_000)
   const action = useAction()
   const decide = async (id: string, verdict: 'approve' | 'reject') => {
     const note = await askText(verdict === 'approve' ? 'Note (optional)' : 'Why reject?') ?? ''

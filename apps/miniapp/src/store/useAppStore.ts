@@ -8,6 +8,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import * as api from '@/api'
 import type {
+  LiveSnapshot,
   ContactPrefs,
   Entry,
   Profile,
@@ -32,6 +33,8 @@ export interface AppState {
   booted: boolean
   booting: boolean
   bootError: string | null
+  /** Why live updates are paused (shown in the app), or null while they flow */
+  liveError: string | null
   profile: Profile | null
   onboardingComplete: boolean
   balance: number
@@ -43,6 +46,11 @@ export interface AppState {
   settings: Settings
 
   boot: () => Promise<void>
+  /** Merges a polled snapshot; fetches full data only for what it shows has changed */
+  applyLive: (live: LiveSnapshot) => Promise<void>
+  /** Full reload of everything (used when the app comes back to the foreground) */
+  refreshAll: () => Promise<void>
+  setLiveError: (message: string | null) => void
   saveKyc: (input: KycInput) => Promise<void>
   completeOnboarding: () => Promise<void>
   refreshRate: () => Promise<void>
@@ -74,6 +82,7 @@ export const useAppStore = create<AppState>()(
       booted: false,
       booting: false,
       bootError: null,
+      liveError: null,
       profile: null,
       onboardingComplete: false,
       balance: 0,
@@ -83,6 +92,49 @@ export const useAppStore = create<AppState>()(
       rate: null,
       rateStatus: 'idle',
       settings: { muted: false, music: false, swipeHintSeen: false },
+
+      async applyLive(live) {
+        const { raffles, balance } = get()
+        const known = new Map(raffles.map((r) => [r.id, r]))
+        // A raffle that appeared, disappeared or was just drawn needs its full record (winners, entrants)
+        const structural =
+          live.raffles.length !== raffles.length ||
+          live.raffles.some((l) => {
+            const k = known.get(l.id)
+            return !k || (k.drawnAt ?? null) !== (l.drawnAt ?? null)
+          })
+        if (structural) {
+          set({ raffles: await api.getRaffles() })
+        } else {
+          const byId = new Map(live.raffles.map((l) => [l.id, l]))
+          const changed = raffles.some((r) => {
+            const l = byId.get(r.id)
+            return !!l && (l.entriesCount !== r.entriesCount || l.entriesTarget !== r.entriesTarget || l.deadline !== r.deadline)
+          })
+          if (changed) {
+            set({
+              raffles: raffles.map((r) => {
+                const l = byId.get(r.id)
+                return l ? { ...r, entriesCount: l.entriesCount, entriesTarget: l.entriesTarget, deadline: l.deadline } : r
+              }),
+            })
+          }
+        }
+        if (live.balance !== balance) {
+          // Money moved (an entry elsewhere, a referral payout, an approved credit): show the new lines too
+          const [transactions, entries] = await Promise.all([api.getTransactions(), api.getEntries()])
+          set({ balance: live.balance, transactions, entries })
+        }
+      },
+
+      async refreshAll() {
+        const data = await api.getBootstrap()
+        set({ ...data })
+      },
+
+      setLiveError(message) {
+        if (get().liveError !== message) set({ liveError: message })
+      },
 
       async boot() {
         if (get().booting) return

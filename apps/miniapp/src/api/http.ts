@@ -14,6 +14,7 @@ import type {
   Profile,
   Raffle,
   KycInput,
+  LiveSnapshot,
   Transaction,
 } from '@/data/types'
 import type { RateQuote } from '@/services/rates'
@@ -96,6 +97,11 @@ export function getRate(): Promise<RateQuote> {
 }
 
 /* Raffles -------------------------------------------------------------------- */
+
+/** The small snapshot polled every few seconds (counts, balance, raffle states). */
+export function getLive(): Promise<LiveSnapshot> {
+  return call<LiveSnapshot>('GET', '/v1/live')
+}
 
 export function getRaffles(): Promise<Raffle[]> {
   return call<Raffle[]>('GET', '/v1/raffles')

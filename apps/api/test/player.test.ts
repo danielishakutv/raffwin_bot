@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { eq, sql } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
-import type { Bootstrap, Entry, Page, RateQuote, ReferralEarning, ReferralSummary, ReferredPerson } from '@raffwin/shared'
+import type { Bootstrap, Entry, LiveSnapshot, Page, RateQuote, ReferralEarning, ReferralSummary, ReferredPerson } from '@raffwin/shared'
 import { entries, ledger, raffles, rateQuotes, users } from '../src/db/schema'
 import { currentQuote } from '../src/services/rates'
 import { putSetting } from '../src/services/settings'
@@ -241,6 +241,34 @@ describe('referral earnings', () => {
     const raffle = await createRaffle(db, { entryPriceRaffs: 9 })
     await enter(friend, raffle.id, 1)
     expect(await balanceOf(referrer.userId)).toBe(0)
+  })
+})
+
+describe('GET /v1/live', () => {
+  it("shows another player's entry and my own balance change on the next poll", async () => {
+    const raffle = await createRaffle(db, { entryPriceRaffs: 20 })
+    const watcher = await member(http)
+    const buyer = await member(http)
+    await credit(db, buyer.userId, 100)
+
+    const before = (await watcher.get('/v1/live')).body as LiveSnapshot
+    expect(before.raffles.find((r) => r.id === raffle.id)?.entriesCount).toBe(0)
+
+    await enter(buyer, raffle.id, 3)
+    const after = (await watcher.get('/v1/live')).body as LiveSnapshot
+    expect(after.raffles.find((r) => r.id === raffle.id)).toMatchObject({ entriesCount: 3, status: 'open' })
+    expect(after.serverTime).toBeGreaterThanOrEqual(before.serverTime)
+
+    const mine = await buyer.get('/v1/live')
+    expect(mine.headers['cache-control']).toBe('no-store')
+    expect(mine.body.balance).toBe(40)
+  })
+
+  it('never lists drafts or cancelled raffles', async () => {
+    const draft = await createRaffle(db, { status: 'draft' })
+    const m = await member(http)
+    const ids = ((await m.get('/v1/live')).body as LiveSnapshot).raffles.map((r) => r.id)
+    expect(ids).not.toContain(draft.id)
   })
 })
 

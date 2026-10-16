@@ -4,7 +4,7 @@
  * or for as long as the player holds an entry in them.
  */
 import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm'
-import type { Entry, Raffle, WinnerSlot } from '@raffwin/shared'
+import type { Entry, LiveSnapshot, Raffle, WinnerSlot } from '@raffwin/shared'
 import type { Db } from '../db/client'
 import { entries, rafflePrizes, raffles, users, type EntryRow, type RaffleRow } from '../db/schema'
 import { HttpError } from '../lib/http-error'
@@ -104,6 +104,39 @@ export async function getForPlayer(db: Db, raffleId: string): Promise<Raffle> {
   if (!row) throw new HttpError('NOT_FOUND', 'That raffle no longer exists.')
   const [raffle] = await toRaffles(db, [row])
   return raffle as Raffle
+}
+
+/**
+ * The polled snapshot: one indexed query over the visible raffles plus the
+ * player's balance. Kept deliberately small, because every open app asks for it
+ * every few seconds.
+ */
+export async function liveSnapshot(db: Db, user: { id: string; balanceCache: number }, now: number): Promise<LiveSnapshot> {
+  const cutoff = new Date(now - DRAWN_VISIBLE_DAYS * 86_400_000)
+  const [me] = await db.select({ balance: users.balanceCache }).from(users).where(eq(users.id, user.id))
+  const rows = await db
+    .select({
+      id: raffles.id,
+      entriesCount: raffles.entriesCount,
+      entriesTarget: raffles.entriesTarget,
+      status: raffles.status,
+      deadline: raffles.deadline,
+      drawnAt: raffles.drawnAt,
+    })
+    .from(raffles)
+    .where(or(inArray(raffles.status, ['open', 'drawing']), and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff))))
+  return {
+    serverTime: now,
+    balance: me?.balance ?? user.balanceCache,
+    raffles: rows.map((r) => ({
+      id: r.id,
+      entriesCount: r.entriesCount,
+      entriesTarget: r.entriesTarget,
+      status: r.status,
+      deadline: r.deadline.toISOString(),
+      drawnAt: r.drawnAt?.toISOString() ?? null,
+    })),
+  }
 }
 
 export async function entriesForPlayer(db: Db, userId: string, limit = 200): Promise<Entry[]> {

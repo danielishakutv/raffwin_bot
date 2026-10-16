@@ -92,6 +92,12 @@ export function v1Routes(ctx: AppContext): Router {
     res.json(toRateQuote(await currentQuote(ctx.db, ctx.now())))
   })
 
+  // Polled every few seconds by the app: counts, balance and raffle states without a refresh
+  router.get('/live', authed, async (req, res) => {
+    res.set('cache-control', 'no-store')
+    res.json(await raffles.liveSnapshot(ctx.db, me(req), ctx.now()))
+  })
+
   router.get('/raffles', authed, async (req, res) => {
     res.json(await raffles.listForPlayer(ctx.db, me(req).id, ctx.now()))
   })

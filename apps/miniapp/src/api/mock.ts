@@ -16,6 +16,7 @@ import type {
   ContactPrefs,
   Entry,
   KycInput,
+  LiveSnapshot,
   Profile,
   Raffle,
   Transaction,
@@ -232,6 +233,24 @@ export async function getRate(): Promise<RateQuote> {
 /* ----------------------------------------------------------------------------
  * Raffles
  * -------------------------------------------------------------------------- */
+
+/** Same shape as the live API's snapshot, read from the demo database. */
+export async function getLive(): Promise<LiveSnapshot> {
+  await jitter(80, 60)
+  const db = loadDb()
+  return {
+    serverTime: Date.now(),
+    balance: db.balance,
+    raffles: db.raffles.map((r) => ({
+      id: r.id,
+      entriesCount: r.entriesCount,
+      entriesTarget: r.entriesTarget,
+      status: r.drawnAt ? 'drawn' : 'open',
+      deadline: r.deadline,
+      drawnAt: r.drawnAt,
+    })),
+  }
+}
 
 export async function getRaffles(): Promise<Raffle[]> {
   await jitter(400)
