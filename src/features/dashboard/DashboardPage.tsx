@@ -122,7 +122,7 @@ export function DashboardPage() {
           </div>
           <RateChip className="shrink-0 border-white/30 bg-white/15 text-white" />
         </div>
-        <div className="relative mt-5 flex gap-2">
+        <div className="relative mt-5 flex flex-col gap-2 min-[380px]:flex-row">
           <BouncyButton variant="sun" size="md" icon={<Wallet size={18} />} onClick={() => navigate('/wallet')} className="flex-1">
             Fund my account
           </BouncyButton>

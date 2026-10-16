@@ -28,8 +28,7 @@ export function SignUpPage() {
   const signUp = useAppStore((s) => s.signUp)
 
   useEffect(() => {
-    if (!booted) navigate('/', { replace: true })
-    else if (profile) navigate(onboardingComplete ? '/home' : '/onboarding', { replace: true })
+    if (booted && profile) navigate(onboardingComplete ? '/home' : '/onboarding', { replace: true })
   }, [booted, profile, onboardingComplete, navigate])
 
   const tg = useMemo(() => getTelegramUser(), [])
