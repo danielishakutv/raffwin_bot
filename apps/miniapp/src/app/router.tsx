@@ -1,9 +1,9 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
 import { RequireOnboarded, RequireProfile } from './guards'
 import { SplashPage } from '@/features/splash/SplashPage'
 import { KycPage } from '@/features/kyc/KycPage'
-import { AdminScreen } from '@/features/admin/AdminScreen'
 import { OnboardingPage } from '@/features/onboarding/OnboardingPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { RafflesPage } from '@/features/raffles/RafflesPage'
@@ -13,6 +13,10 @@ import { HistoryPage } from '@/features/profile/HistoryPage'
 import { EntriesPage } from '@/features/profile/EntriesPage'
 import { WinsPage } from '@/features/profile/WinsPage'
 import { ReferralsPage } from '@/features/referrals/ReferralsPage'
+
+// Only admins open it, so players never download the admin code
+const AdminScreen = lazy(() => import('@/features/admin/AdminScreen').then((m) => ({ default: m.AdminScreen })))
+const adminLoading = <div className="fixed inset-0 z-40 bg-neutral-50" aria-label="Loading the admin" />
 
 /**
  * Routes (hash-based, see App.tsx):
@@ -35,7 +39,14 @@ export function AppRoutes() {
       <Route path="/" element={<SplashPage />} />
       {/* There is no sign-up: opening the bot is the account. Old links land on the splash. */}
       <Route path="/signup" element={<Navigate to="/" replace />} />
-      <Route path="/admin/*" element={<AdminScreen />} />
+      <Route
+        path="/admin/*"
+        element={
+          <Suspense fallback={adminLoading}>
+            <AdminScreen />
+          </Suspense>
+        }
+      />
       <Route
         path="/onboarding"
         element={

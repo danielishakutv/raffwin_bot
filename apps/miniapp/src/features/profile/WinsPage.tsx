@@ -6,7 +6,8 @@ import { BouncyButton } from '@/components/ui/BouncyButton'
 import { cn } from '@/components/ui/cn'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/ui/PageHeader'
-import { PrizeArt } from '@/components/ui/PrizeArt'
+import { PrizeVisual } from '@/components/ui/PrizeVisual'
+import { medalClass, prizeLabel } from '@/data/prizes'
 import { useBackButton } from '@/hooks/useBackButton'
 import { formatDateTime } from '@/services/format'
 import { haptics } from '@/services/haptics'
@@ -19,7 +20,6 @@ export function WinsPage() {
   const profile = useAppStore((s) => s.profile)
   useBackButton(true, () => navigate('/profile'))
 
-  const medal = ['bg-sunny text-ink', 'bg-white/80 text-ink', 'bg-[#d9a066] text-ink']
   const needsDetails = profile && !profile.kycComplete
 
   return (
@@ -53,9 +53,9 @@ export function WinsPage() {
                 className="tap surface flex w-full items-center gap-3 rounded-2xl p-3 text-left"
               >
                 <div className="relative h-16 w-16 shrink-0 rounded-xl bg-white/5">
-                  <PrizeArt kind={raffle.kind} hue={raffle.hue} className="h-full w-full" />
-                  <span className={cn('absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-lg font-display text-[11px] font-extrabold', medal[slot.position - 1])}>
-                    {['1st', '2nd', '3rd'][slot.position - 1]}
+                  <PrizeVisual kind={raffle.kind} hue={raffle.hue} imageUrl={raffle.imageUrl} rounded="rounded-xl" className="h-full w-full" />
+                  <span className={cn('absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-lg font-display text-[11px] font-extrabold', medalClass(slot.position))}>
+                    {prizeLabel(slot.position, raffle.winners.length)}
                   </span>
                 </div>
                 <div className="min-w-0 flex-1">

@@ -21,6 +21,7 @@ import { HttpError } from '../lib/http-error'
 import * as account from '../services/account'
 import * as auth from '../services/auth'
 import * as entryService from '../services/entries'
+import { readMedia } from '../services/media'
 import { recentTransactions } from '../services/ledger'
 import * as raffles from '../services/raffles'
 import { currentQuote, toRateQuote } from '../services/rates'
@@ -97,6 +98,22 @@ export function v1Routes(ctx: AppContext): Router {
   router.get('/live', authed, async (req, res) => {
     res.set('cache-control', 'no-store')
     res.json(await raffles.liveSnapshot(ctx.db, me(req), ctx.now()))
+  })
+
+  // Raffle photos: public, because an <img> carries no token. Ids are random uuids.
+  router.get('/media/:id', async (req, res) => {
+    const id = z.string().uuid().safeParse(req.params.id)
+    const found = id.success ? await readMedia(ctx, id.data) : null
+    if (!found) throw new HttpError('NOT_FOUND', 'No such image.')
+    res.set({
+      'Content-Type': found.mime,
+      'Content-Length': String(found.bytes.length),
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      ETag: `"${found.sha256.slice(0, 32)}"`,
+      // Served on the API; the app may sit on another origin during development
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+    })
+    res.end(found.bytes)
   })
 
   router.get('/raffles', authed, async (req, res) => {

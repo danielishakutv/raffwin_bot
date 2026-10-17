@@ -3,11 +3,30 @@
  * validate exactly like the server. Import from '@raffwin/shared/admin-schemas'.
  */
 import { z } from 'zod'
+import { MAX_PRIZES, ordinal } from './prizes'
 
 export const RAFFLE_KINDS = ['phone', 'laptop', 'tv', 'earbuds', 'powerbank', 'voucher', 'console'] as const
 
+/**
+ * Raffle photos are always uploads stored on the API, served at /v1/media/<uuid>
+ * and never larger than MEDIA_MAX_BYTES. A photo from a link is fetched through
+ * the API (POST /admin/v1/media/fetch), shrunk in the app and uploaded like any other.
+ */
+export const MEDIA_PATH = /^\/v1\/media\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const imageUrl = z.string().trim().regex(MEDIA_PATH, 'Upload the photo (or import it from a link) so it is stored and kept small')
+
+export const MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
+/** Hard limit on a stored raffle photo; the app shrinks photos to fit */
+export const MEDIA_MAX_BYTES = 500_000
+/** Largest original the API will fetch from a link for the app to shrink */
+export const MEDIA_FETCH_MAX_BYTES = 15_000_000
+
+export const mediaFetchBody = z.object({
+  url: z.string().trim().max(1000).regex(/^https:\/\/[^\s"'<>]+$/i, 'Use a full address that starts with https://'),
+})
+
 const prize = z.object({
-  position: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  position: z.number().int().min(1).max(MAX_PRIZES),
   prizeItem: z.string().trim().min(2).max(120),
   prizeType: z.enum(['physical', 'raffs_credit']),
   raffsValue: z.number().int().min(0).max(10_000_000).default(0),
@@ -22,20 +41,30 @@ export const raffleBody = z
     category: z.string().trim().min(2).max(40),
     kind: z.enum(RAFFLE_KINDS),
     hue: z.number().int().min(0).max(360).default(260),
+    /**
+     * Prize photo: the path an upload returned (/v1/media/<id>).
+     * Null shows the drawn illustration for the kind.
+     */
+    imageUrl: imageUrl.nullable().default(null),
     marketPriceNaira: z.number().int().min(0).max(1_000_000_000),
     entryPriceRaffs: z.number().int().min(1).max(1_000_000),
-    entriesTarget: z.number().int().min(3).max(1_000_000),
+    entriesTarget: z.number().int().min(1).max(1_000_000),
     deadline: z.string().datetime({ offset: true }),
     description: z.string().trim().max(2000).default(''),
     rules: z.array(z.string().trim().min(1).max(300)).max(20).default([]),
-    prizes: z.array(prize).length(3, 'Every raffle has exactly three prizes'),
+    prizes: z.array(prize).min(1, 'A raffle needs at least one prize').max(MAX_PRIZES, `At most ${MAX_PRIZES} prizes`),
   })
   .superRefine((v, ctx) => {
-    const positions = v.prizes.map((p) => p.position).sort()
-    if (positions.join() !== '1,2,3') ctx.addIssue({ code: 'custom', path: ['prizes'], message: 'Prizes must be 1st, 2nd and 3rd' })
+    const positions = v.prizes.map((p) => p.position).sort((a, b) => a - b)
+    if (positions.some((p, i) => p !== i + 1)) {
+      ctx.addIssue({ code: 'custom', path: ['prizes'], message: `Prizes must be numbered 1 to ${v.prizes.length} with no gaps` })
+    }
+    if (v.entriesTarget < v.prizes.length) {
+      ctx.addIssue({ code: 'custom', path: ['entriesTarget'], message: `Sell at least ${v.prizes.length} entries: one ticket wins one prize` })
+    }
     v.prizes.forEach((p, i) => {
       if (p.prizeType === 'raffs_credit' && p.raffsValue <= 0) {
-        ctx.addIssue({ code: 'custom', path: ['prizes', i, 'raffsValue'], message: 'A Raffs prize needs a Raffs value' })
+        ctx.addIssue({ code: 'custom', path: ['prizes', i, 'raffsValue'], message: `The ${ordinal(p.position)} prize is Raffs, so it needs a Raffs value` })
       }
     })
   })

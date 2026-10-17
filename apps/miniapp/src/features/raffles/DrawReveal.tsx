@@ -6,6 +6,7 @@ import { BouncyButton } from '@/components/ui/BouncyButton'
 import { cn } from '@/components/ui/cn'
 import { Spinner } from '@/components/ui/Spinner'
 import type { Raffle, WinnerSlot } from '@/data/types'
+import { medalClass, prizeLabel } from '@/data/prizes'
 import { celebrate } from '@/services/confetti'
 import { haptics } from '@/services/haptics'
 import { sound } from '@/services/sound'
@@ -17,14 +18,15 @@ const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, 
 
 /**
  * Winner reveal for a raffle whose deadline has passed. Names roll with a
- * drumroll, then land one at a time: 3rd, 2nd, and finally 1st.
+ * drumroll, then land one at a time from the last place up to 1st.
  */
 export function DrawReveal({ raffle, onRevealed }: { raffle: Raffle; onRevealed?: (youWon: boolean) => void }) {
   const drawRaffle = useAppStore((s) => s.drawRaffle)
   const me = useAppStore((s) => s.profile?.username ?? null)
   const [phase, setPhase] = useState<Phase>(raffle.drawnAt ? 'done' : 'idle')
   const [winners, setWinners] = useState<WinnerSlot[]>(raffle.drawnAt ? raffle.winners : [])
-  const [landed, setLanded] = useState<Set<number>>(() => new Set(raffle.drawnAt ? [1, 2, 3] : []))
+  const places = raffle.winners.map((w) => w.position).sort((a, b) => a - b)
+  const [landed, setLanded] = useState<Set<number>>(() => new Set(raffle.drawnAt ? places : []))
   const [rolling, setRolling] = useState<{ position: number; name: string } | null>(null)
   const [youWon, setYouWon] = useState(() => !!raffle.drawnAt && raffle.winners.some((w) => w.username === me))
   const [error, setError] = useState<string | null>(null)
@@ -46,12 +48,14 @@ export function DrawReveal({ raffle, onRevealed }: { raffle: Raffle; onRevealed?
       setWinners(res.raffle.winners)
       setPhase('rolling')
       const pool = raffle.entrants.length ? raffle.entrants : ['ada_obi', 'tunde_k', 'chidi']
-      for (const position of [3, 2, 1] as const) {
+      // Long lists roll faster so the whole reveal stays around ten seconds
+      const rollMs = Math.max(500, Math.min(1700, 9000 / places.length))
+      for (const position of [...places].reverse()) {
         sound.play('drumroll')
         haptics.impact('light')
         const started = Date.now()
         let tick = 0
-        while (Date.now() - started < 1700) {
+        while (Date.now() - started < rollMs) {
           if (!alive.current) return
           setRolling({ position, name: pool[(tick * 7 + position) % pool.length] })
           tick += 1
@@ -63,7 +67,7 @@ export function DrawReveal({ raffle, onRevealed }: { raffle: Raffle; onRevealed?
         sound.play(position === 1 ? 'fanfare' : 'land')
         haptics.impact(position === 1 ? 'heavy' : 'medium')
         if (slot?.username === me) haptics.notify('success')
-        await wait(position === 1 ? 300 : 650)
+        await wait(position === 1 ? 300 : Math.min(650, rollMs / 2))
       }
       if (!alive.current) return
       setYouWon(res.youWon)
@@ -78,8 +82,6 @@ export function DrawReveal({ raffle, onRevealed }: { raffle: Raffle; onRevealed?
       sound.play('error')
     }
   }
-
-  const medal = ['bg-sunny text-ink', 'bg-white/80 text-ink', 'bg-[#d9a066] text-ink']
 
   return (
     <div className="flex flex-col gap-3">
@@ -101,7 +103,7 @@ export function DrawReveal({ raffle, onRevealed }: { raffle: Raffle; onRevealed?
       </AnimatePresence>
 
       <ol className="flex flex-col gap-2">
-        {[1, 2, 3].map((position) => {
+        {places.map((position) => {
           const slot = (winners.length ? winners : raffle.winners).find((w) => w.position === position)
           const isLanded = landed.has(position)
           const isRolling = rolling?.position === position
@@ -116,8 +118,8 @@ export function DrawReveal({ raffle, onRevealed }: { raffle: Raffle; onRevealed?
                 isRolling && 'border-magenta/50',
               )}
             >
-              <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl font-display text-[13px] font-extrabold', medal[position - 1])}>
-                {['1st', '2nd', '3rd'][position - 1]}
+              <span className={cn('flex h-9 min-w-9 shrink-0 items-center justify-center rounded-xl px-1.5 font-display text-[13px] font-extrabold', medalClass(position))}>
+                {prizeLabel(position, places.length)}
               </span>
               <div className="min-w-0 flex-1">
                 <div className="h-6 overflow-hidden">

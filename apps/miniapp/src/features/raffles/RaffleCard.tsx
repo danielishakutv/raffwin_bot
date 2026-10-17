@@ -3,12 +3,13 @@ import { Clock, Trophy, Users } from 'lucide-react'
 import { Chip } from '@/components/ui/Chip'
 import { cn } from '@/components/ui/cn'
 import { Countdown } from '@/components/ui/Countdown'
-import { PrizeArt } from '@/components/ui/PrizeArt'
+import { PrizeVisual } from '@/components/ui/PrizeVisual'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { Spinner } from '@/components/ui/Spinner'
 import { useNow } from '@/hooks/useNow'
 import { useRate } from '@/hooks/useRate'
+import { prizeLabel, trophyClass, winnersLabel } from '@/data/prizes'
 import { getRaffleStatus, isUrgent, STATUS_LABEL } from '@/data/raffleStatus'
 import type { Raffle } from '@/data/types'
 import { formatDate, formatInt, formatNaira, formatRaffs } from '@/services/format'
@@ -68,9 +69,15 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
         <motion.div
           animate={live ? { y: [0, -6, 0] } : undefined}
           transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
-          className="relative mx-auto mt-2 h-40 w-40 [transform:translateZ(30px)]"
+          className={cn('relative mx-auto mt-2 h-40 [transform:translateZ(30px)]', raffle.imageUrl ? 'w-full max-w-[17rem]' : 'w-40')}
         >
-          <PrizeArt kind={raffle.kind} hue={raffle.hue} className="h-full w-full drop-shadow-[0_18px_24px_rgba(0,0,0,0.35)]" />
+          <PrizeVisual
+            kind={raffle.kind}
+            hue={raffle.hue}
+            imageUrl={raffle.imageUrl}
+            rounded="rounded-2xl ring-1 ring-white/25 shadow-[0_18px_30px_-8px_rgba(0,0,0,0.5)]"
+            className="h-full w-full drop-shadow-[0_18px_24px_rgba(0,0,0,0.35)]"
+          />
         </motion.div>
         {status === 'drawn' && (
           <div className="pointer-events-none absolute right-4 top-14 rotate-[-14deg] rounded-lg border-[3px] border-sun px-3 py-1 font-display text-xl font-extrabold tracking-wider text-sun opacity-90">
@@ -100,8 +107,8 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
             <p className="text-[12px] font-semibold text-mist">Drawn {raffle.drawnAt ? formatDate(raffle.drawnAt) : ''}</p>
             {raffle.winners.map((w) => (
               <div key={w.position} className="flex items-center gap-2 text-[13px]">
-                <Trophy size={14} className={['text-sun', 'text-mist', 'text-[#d9a066]'][w.position - 1]} />
-                <span className="w-7 font-bold text-mist">{['1st', '2nd', '3rd'][w.position - 1]}</span>
+                <Trophy size={14} className={trophyClass(w.position)} />
+                <span className="w-10 shrink-0 font-bold text-mist">{prizeLabel(w.position, raffle.winners.length)}</span>
                 <span className="truncate font-bold">@{w.username ?? 'TBD'}</span>
                 <span className="ml-auto truncate text-haze">{w.prizeItem}</span>
               </div>
@@ -139,7 +146,10 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
               </div>
             </div>
             <p className="mt-3 flex items-center gap-1.5 text-[12px] font-semibold text-mist">
-              <Trophy size={13} className="text-sun" /> 3 winners: {raffle.winners.map((w) => w.prizeItem).join(', ')}
+              <Trophy size={13} className="shrink-0 text-sun" />
+              <span className="line-clamp-2">
+                {winnersLabel(raffle.winners.length)}: {raffle.winners.map((w) => w.prizeItem).join(', ')}
+              </span>
             </p>
           </>
         )}

@@ -27,8 +27,8 @@ export const RULES_SECTIONS: { title: string; items: string[] }[] = [
   {
     title: 'Winner selection',
     items: [
-      'There is one draw per raffle. Three winners are selected at random from all valid entries.',
-      '1st place receives the main prize. 2nd and 3rd place receive the prizes listed on the raffle.',
+      'There is one draw per raffle. Each raffle lists its prizes; one winner is selected at random from all valid entries for each prize.',
+      'With several prizes, places run 1st, 2nd, 3rd and so on, each receiving the prize listed for it. One ticket wins one prize.',
       'Results are published in the app and winners are notified on Telegram.',
     ],
   },

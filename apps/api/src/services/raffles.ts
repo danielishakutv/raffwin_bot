@@ -53,7 +53,7 @@ export async function toRaffles(db: Db, rows: RaffleRow[]): Promise<Raffle[]> {
     const winners: WinnerSlot[] = prizes
       .filter((p) => p.prize.raffleId === r.id)
       .map((p) => ({
-        position: p.prize.position as 1 | 2 | 3,
+        position: p.prize.position,
         prizeItem: p.prize.prizeItem,
         username: r.status === 'drawn' ? p.winner : null,
       }))
@@ -64,6 +64,7 @@ export async function toRaffles(db: Db, rows: RaffleRow[]): Promise<Raffle[]> {
       category: r.category,
       kind: r.kind,
       hue: r.hue,
+      imageUrl: r.imageUrl,
       marketPriceNaira: r.marketPriceNaira,
       entryPriceRaffs: r.entryPriceRaffs,
       deadline: r.deadline.toISOString(),
@@ -123,7 +124,7 @@ export async function liveSnapshot(db: Db, user: { id: string; balanceCache: num
       deadline: raffles.deadline,
       drawnAt: raffles.drawnAt,
       // Everything an admin can edit that players see; entry sales leave it alone
-      version: sql<string>`md5(concat_ws('|', ${raffles.prizeName}, ${raffles.model}, ${raffles.category}, ${raffles.kind}, ${raffles.hue}, ${raffles.marketPriceNaira}, ${raffles.entryPriceRaffs}, ${raffles.description}, ${raffles.rules}::text, (select string_agg(p.position || ':' || p.prize_item || ':' || p.prize_type || ':' || p.raffs_value, ',' order by p.position) from raffle_prizes p where p.raffle_id = "raffles"."id")))`,
+      version: sql<string>`md5(concat_ws('|', ${raffles.prizeName}, ${raffles.model}, ${raffles.category}, ${raffles.kind}, ${raffles.hue}, coalesce(${raffles.imageUrl}, ''), ${raffles.marketPriceNaira}, ${raffles.entryPriceRaffs}, ${raffles.description}, ${raffles.rules}::text, (select string_agg(p.position || ':' || p.prize_item || ':' || p.prize_type || ':' || p.raffs_value, ',' order by p.position) from raffle_prizes p where p.raffle_id = "raffles"."id")))`,
     })
     .from(raffles)
     .where(or(inArray(raffles.status, ['open', 'drawing']), and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff))))

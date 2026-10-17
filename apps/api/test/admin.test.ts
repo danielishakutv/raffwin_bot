@@ -584,3 +584,110 @@ describe('overview, security events and the audit log', () => {
     }
   })
 })
+
+describe('prizes: one by default, any number in order', () => {
+  const places = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ position: i + 1, prizeItem: `Prize number ${i + 1}`, prizeType: 'raffs_credit', raffsValue: 1000 - i * 10 }))
+
+  it('runs a raffle with a single prize', async () => {
+    const m = await makeAdmin('raffle_manager')
+    const created = await write(m, '/admin/v1/raffles', raffleInput({ prizes: [{ position: 1, prizeItem: 'Samsung Galaxy A15', prizeType: 'physical' }] }))
+    expect(created.status, JSON.stringify(created.body)).toBe(201)
+    expect((await write(m, `/admin/v1/raffles/${created.body.id}/open`)).body.status).toBe('open')
+    const player = await member(http)
+    const seen = (await player.get(`/v1/raffles/${created.body.id}`)).body as { winners: { position: number }[] }
+    expect(seen.winners.map((w) => w.position)).toEqual([1])
+  })
+
+  it('keeps many prizes in place order, and refuses gaps or too few entries', async () => {
+    const m = await makeAdmin('raffle_manager')
+    const created = await write(m, '/admin/v1/raffles', raffleInput({ prizes: [...places(7)].reverse() }))
+    expect(created.status, JSON.stringify(created.body)).toBe(201)
+    expect((created.body as AdminRaffle).prizes.map((p) => p.position)).toEqual([1, 2, 3, 4, 5, 6, 7])
+
+    const gap = await write(m, '/admin/v1/raffles', raffleInput({ prizes: places(3).map((p) => (p.position === 2 ? { ...p, position: 5 } : p)) }))
+    expect(gap.status).toBe(400)
+    expect(gap.body.error.fields.prizes).toMatch(/no gaps/)
+
+    const short = await write(m, '/admin/v1/raffles', raffleInput({ entriesTarget: 4, prizes: places(5) }))
+    expect(short.status).toBe(400)
+    expect(short.body.error.fields.entriesTarget).toMatch(/at least 5/)
+
+    expect((await write(m, '/admin/v1/raffles', raffleInput({ prizes: places(21) }))).status).toBe(400)
+  })
+
+  it('lets a draft drop places, but an open raffle with entries only gain them', async () => {
+    const boss = await makeAdmin('super_admin')
+    const draft = await write(boss, '/admin/v1/raffles', raffleInput({ prizes: places(5) }))
+    const trimmed = await put(boss, `/admin/v1/raffles/${draft.body.id}`, raffleInput({ prizes: places(2) }))
+    expect(trimmed.status, JSON.stringify(trimmed.body)).toBe(200)
+    expect((trimmed.body as AdminRaffle).prizes).toHaveLength(2)
+
+    await write(boss, `/admin/v1/raffles/${draft.body.id}/open`)
+    const player = await member(http)
+    await credit(db, player.userId, 1000)
+    await player.post('/v1/entries', { raffleId: draft.body.id, qty: 1, idempotencyKey: randomUUID() })
+
+    const fewer = await put(boss, `/admin/v1/raffles/${draft.body.id}`, raffleInput({ prizes: places(1) }))
+    expect(fewer.status).toBe(400)
+    expect(fewer.body.error.message).toMatch(/added or edited, not removed/)
+    const more = await put(boss, `/admin/v1/raffles/${draft.body.id}`, raffleInput({ prizes: places(4) }))
+    expect(more.status, JSON.stringify(more.body)).toBe(200)
+    expect((more.body as AdminRaffle).prizes).toHaveLength(4)
+  })
+})
+
+describe('raffle photos', () => {
+  // A valid 1x1 PNG
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
+  const upload = (a: Admin, bytes: Buffer, type = 'image/png') => http.post('/admin/v1/media').set(auth(a)).set('content-type', type).send(bytes)
+
+  it('stores an upload once, serves it publicly and shows it on the raffle', async () => {
+    const m = await makeAdmin('raffle_manager')
+    const first = await upload(m, png)
+    expect(first.status, JSON.stringify(first.body)).toBe(201)
+    expect(first.body).toMatchObject({ mime: 'image/png', sizeBytes: png.length, width: 1, height: 1 })
+    expect(first.body.url).toMatch(/^\/v1\/media\/[0-9a-f-]{36}$/)
+    // The same file again is the same stored image
+    expect((await upload(m, png)).body.id).toBe(first.body.id)
+
+    const served = await http.get(first.body.url).buffer(true)
+    expect(served.status).toBe(200)
+    expect(served.headers['content-type']).toBe('image/png')
+    expect(Buffer.compare(served.body as Buffer, png)).toBe(0)
+
+    const created = await write(m, '/admin/v1/raffles', raffleInput({ imageUrl: first.body.url }))
+    expect(created.status, JSON.stringify(created.body)).toBe(201)
+    await write(m, `/admin/v1/raffles/${created.body.id}/open`)
+    const player = await member(http)
+    expect((await player.get(`/v1/raffles/${created.body.id}`)).body.imageUrl).toBe(first.body.url)
+
+    // Players' live poll notices a new photo
+    const live1 = (await player.get('/v1/live')).body.raffles.find((r: { id: string }) => r.id === created.body.id)
+    await db.update(raffles).set({ imageUrl: null }).where(eq(raffles.id, created.body.id))
+    const live2 = (await player.get('/v1/live')).body.raffles.find((r: { id: string }) => r.id === created.body.id)
+    expect(live2.version).not.toBe(live1.version)
+  })
+
+  it('refuses files that are not photos, oversize files, outside links and viewers', async () => {
+    const m = await makeAdmin('raffle_manager')
+    expect((await upload(m, Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), 'image/png')).status).toBe(400)
+    const big = Buffer.concat([png, Buffer.alloc(500_001)])
+    expect((await upload(m, big)).status).toBe(413)
+    const linked = await write(m, '/admin/v1/raffles', raffleInput({ imageUrl: 'https://example.com/a.jpg' }))
+    expect(linked.status).toBe(400)
+    expect(linked.body.error.fields.imageUrl).toMatch(/Upload the photo/)
+    expect((await upload(await makeAdmin('viewer'), png)).status).toBe(403)
+    expect((await http.get(`/v1/media/${randomUUID()}`)).status).toBe(404)
+  })
+
+  it('will not fetch a link that points inside a private network', async () => {
+    const m = await makeAdmin('raffle_manager')
+    for (const url of ['https://127.0.0.1/x.png', 'https://[::1]/x.png', 'https://[::ffff:127.0.0.1]/x.png', 'https://[::ffff:a9fe:a9fe]/latest', 'https://[2002:7f00:1::]/x.png', 'https://2130706433/x.png', 'https://169.254.169.254/latest', 'https://10.0.0.5/a.jpg', 'https://localhost/a.jpg']) {
+      const res = await write(m, '/admin/v1/media/fetch', { url })
+      expect(res.status, url).toBe(400)
+      expect(res.body.error.message, url).toMatch(/private network/)
+    }
+    expect((await write(m, '/admin/v1/media/fetch', { url: 'http://example.com/a.jpg' })).status).toBe(400)
+  })
+})

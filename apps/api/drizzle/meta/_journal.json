@@ -57,6 +57,13 @@
       "when": 1792184733060,
       "tag": "0007_m3_finance",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792191019042,
+      "tag": "0008_m4_raffle_images_prizes",
+      "breakpoints": true
     }
   ]
 }

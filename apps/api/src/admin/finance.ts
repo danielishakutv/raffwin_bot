@@ -71,7 +71,7 @@ export async function report(ctx: AppContext, p: Period): Promise<AdminFinance> 
       .filter((x) => x.raffleId === r.id)
       .sort((a, b) => a.position - b.position)
       .map((x) => ({
-        position: x.position as 1 | 2 | 3,
+        position: x.position,
         prizeItem: x.prizeItem,
         prizeType: x.prizeType,
         raffsValue: x.raffsValue,

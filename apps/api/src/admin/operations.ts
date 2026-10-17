@@ -3,7 +3,7 @@
  * rate goes through approvals.ts instead; everything here is audit-logged.
  */
 import { randomUUID } from 'node:crypto'
-import { and, asc, desc, eq, gte, ilike, inArray, lt, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, ilike, inArray, lt, or, sql } from 'drizzle-orm'
 import type { RaffleBody, LimitsBody } from '@raffwin/shared/admin-schemas'
 import type {
   AdminAuditRow,
@@ -56,6 +56,7 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
     category: r.category,
     kind: r.kind,
     hue: r.hue,
+    imageUrl: r.imageUrl,
     marketPriceNaira: r.marketPriceNaira,
     entryPriceRaffs: r.entryPriceRaffs,
     entriesTarget: r.entriesTarget,
@@ -67,7 +68,7 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
     prizes: prizes
       .filter((x) => x.p.raffleId === r.id)
       .map((x) => ({
-        position: x.p.position as 1 | 2 | 3,
+        position: x.p.position,
         prizeItem: x.p.prizeItem,
         prizeType: x.p.prizeType,
         raffsValue: x.p.raffsValue,
@@ -123,7 +124,6 @@ export async function createRaffle(ctx: AppContext, adminId: string | null, body
   return getRaffle(ctx, id)
 }
 
-/** Drafts only: once a raffle opens, its price, size and prizes are fixed. */
 /**
  * Drafts: anyone with raffles.write. Open raffles: super admins only, and the
  * stock can never drop below what is already sold, nor the deadline into the
@@ -153,6 +153,12 @@ export async function updateRaffle(
       throw new HttpError('INVALID_INPUT', `This raffle is ${row.status}; it can no longer be changed.`)
     }
     const before = await getRaffle(ctx, id)
+    // Players who already entered were promised these places: an open raffle can gain prizes, never lose them
+    if (row.status === 'open' && row.entriesCount > 0 && body.prizes.length < before.prizes.length) {
+      throw new HttpError('INVALID_INPUT', `${row.entriesCount} entries are already sold with ${before.prizes.length} prizes on offer; prizes can be added or edited, not removed.`, {
+        prizes: `At least ${before.prizes.length}`,
+      })
+    }
     const { prizes, deadline, ...fields } = body
     await tx
       .update(raffles)
@@ -167,6 +173,8 @@ export async function updateRaffle(
           set: { prizeItem: p.prizeItem, prizeType: p.prizeType, raffsValue: p.raffsValue, costNaira: p.costNaira },
         })
     }
+    // Places taken off the end (drafts, or open raffles nobody has entered yet). The audit row keeps them in `before`.
+    await tx.delete(rafflePrizes).where(and(eq(rafflePrizes.raffleId, id), gt(rafflePrizes.position, prizes.length)))
     await appendAudit(tx, { adminId, action: 'raffle.update', targetType: 'raffle', targetId: id, before, after: body })
   })
   return getRaffle(ctx, id)
@@ -199,7 +207,7 @@ export async function openRaffle(ctx: AppContext, adminId: string | null, id: st
       throw new HttpError('INVALID_INPUT', 'The deadline must be at least an hour away to open a raffle.')
     }
     const [count] = await tx.select({ n: sql<number>`count(*)::int` }).from(rafflePrizes).where(eq(rafflePrizes.raffleId, id))
-    if ((count?.n ?? 0) !== 3) throw new HttpError('INVALID_INPUT', 'A raffle needs its three prizes before it opens.')
+    if ((count?.n ?? 0) < 1) throw new HttpError('INVALID_INPUT', 'Add at least one prize before publishing.')
     await tx.update(raffles).set({ status: 'open', openedAt: sql`now()`, updatedAt: sql`now()` }).where(eq(raffles.id, id))
     await appendAudit(tx, { adminId, action: 'raffle.open', targetType: 'raffle', targetId: id })
   })

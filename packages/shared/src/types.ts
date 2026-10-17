@@ -9,7 +9,8 @@ export type RaffleStatus = 'open' | 'closing_soon' | 'drawing' | 'drawn'
 export type PrizeKind = 'phone' | 'laptop' | 'tv' | 'earbuds' | 'powerbank' | 'voucher' | 'console'
 
 export interface WinnerSlot {
-  position: 1 | 2 | 3
+  /** 1..n with no gaps; see prizeLabel() for how a place is named */
+  position: number
   /** What this position wins, e.g. "Samsung Galaxy A15" or "₦20,000 airtime" */
   prizeItem: string
   /** Winner username without @, or null while the draw is pending ("TBD") */
@@ -24,6 +25,8 @@ export interface Raffle {
   kind: PrizeKind
   /** Accent hue (0-360) used for the card gradient and illustration */
   hue: number
+  /** Prize photo, a /v1/media/<id> path on the API (always under 500 KB); null shows the drawn illustration */
+  imageUrl: string | null
   marketPriceNaira: number
   /**
    * Price of one entry in Raffs, fixed for the life of the raffle. The hourly

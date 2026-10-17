@@ -10,6 +10,7 @@ import { sql } from 'drizzle-orm'
 import {
   type AnyPgColumn,
   bigint,
+  customType,
   boolean,
   index,
   integer,
@@ -252,6 +253,8 @@ export const raffles = pgTable(
     category: text('category').notNull(),
     kind: text('kind', { enum: RAFFLE_KINDS }).notNull(),
     hue: integer('hue').notNull().default(260),
+    /** https address or /v1/media/<id> (an upload in the media table); null = drawn illustration */
+    imageUrl: text('image_url'),
     marketPriceNaira: integer('market_price_naira').notNull(),
     /** Fixed once the raffle opens */
     entryPriceRaffs: integer('entry_price_raffs').notNull(),
@@ -566,6 +569,29 @@ export const financeExpenses = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('finance_expenses_spent_idx').on(t.spentOn), index('finance_expenses_raffle_idx').on(t.raffleId)],
+)
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' })
+
+/**
+ * Images admins upload for raffles, served publicly at GET /v1/media/<id>.
+ * Kept in the database so they are in the nightly backup with everything else.
+ * The same file uploaded twice is stored once (sha256).
+ */
+export const media = pgTable(
+  'media',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    mime: text('mime').notNull(),
+    bytes: bytea('bytes').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    width: integer('width'),
+    height: integer('height'),
+    sha256: text('sha256').notNull(),
+    createdByAdminId: uuid('created_by_admin_id').references(() => adminUsers.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('media_sha256_key').on(t.sha256)],
 )
 
 export type RaffleRow = typeof raffles.$inferSelect

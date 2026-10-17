@@ -173,20 +173,35 @@ export async function unlockFromUrl(): Promise<boolean> {
 
 /** An authenticated admin request; a 401 ends the session with the reason shown. */
 export async function adminCall<T>(method: string, path: string, body?: unknown): Promise<T> {
+  return send<T>(method, path, body !== undefined ? { type: 'application/json', data: JSON.stringify(body) } : undefined)
+}
+
+/** Sends a file as the raw request body (raffle photos: POST /media). */
+export async function adminUpload<T>(path: string, file: Blob): Promise<T> {
+  return send<T>('POST', path, { type: file.type, data: file })
+}
+
+/** POST JSON, get a file back (POST /media/fetch returns the image from a link). */
+export async function adminFetchBlob(path: string, body: unknown): Promise<Blob> {
+  return send<Blob>('POST', path, { type: 'application/json', data: JSON.stringify(body) }, true)
+}
+
+async function send<T>(method: string, path: string, body?: { type: string; data: BodyInit }, asBlob = false): Promise<T> {
   const { token } = useAdminSession.getState()
   if (!token) throw new ApiError('AUTH_INVALID', 'The admin is locked. Sign in from the bot again.')
   let res: Response
   try {
     res = await fetch(`${env.apiUrl}/admin/v1${path}`, {
       method,
-      headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': body.type } : {}) },
+      body: body?.data,
     })
   } catch (error) {
     console.warn('[admin] network error', path, error)
     throw new ApiError('SERVER_ERROR', 'Could not reach Raffle Win. Check the connection and try again.')
   }
   try {
+    if (asBlob && res.ok) return (await res.blob()) as T
     return await parse<T>(res)
   } catch (error) {
     if (error instanceof ApiError && error.code === 'AUTH_INVALID') useAdminSession.getState().clear(error.message)

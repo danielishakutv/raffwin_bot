@@ -177,8 +177,8 @@ function WelcomeSlide({ name }: { name: string }) {
         Welcome to Raffle Win, <span className="text-brand">{name}</span>
       </h1>
       <p className="mt-3 max-w-[34ch] text-[15px] leading-6 text-mist">
-        Buy Raffs with Naira, enter the raffles you like, and watch the draw happen live. Every raffle has three
-        winners.
+        Buy Raffs with Naira, enter the raffles you like, and watch the draw happen live. Every raffle shows its
+        prizes up front.
       </p>
     </div>
   )
@@ -200,8 +200,8 @@ const steps = [
   {
     icon: Trophy,
     tone: 'bg-lagoon text-ink',
-    title: 'One draw, three winners',
-    body: '1st place takes the main prize. 2nd and 3rd place win the extras listed on the raffle.',
+    title: 'One draw, every prize won',
+    body: 'Each raffle lists its prizes. With several, 1st place takes the main prize and the next places win the others, in order.',
   },
 ]
 

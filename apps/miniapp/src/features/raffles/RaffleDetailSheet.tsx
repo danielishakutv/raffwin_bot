@@ -4,7 +4,8 @@ import { BouncyButton } from '@/components/ui/BouncyButton'
 import { Chip } from '@/components/ui/Chip'
 import { cn } from '@/components/ui/cn'
 import { Countdown } from '@/components/ui/Countdown'
-import { PrizeArt } from '@/components/ui/PrizeArt'
+import { PrizeVisual } from '@/components/ui/PrizeVisual'
+import { medalClass, prizeLabel, winnersLabel } from '@/data/prizes'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { Sheet } from '@/components/ui/Sheet'
@@ -61,7 +62,13 @@ export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, o
             >
               <div className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-white/20 blur-2xl" />
               <div className="relative flex items-center gap-4">
-                <PrizeArt kind={raffle.kind} hue={raffle.hue} className="h-32 w-32 shrink-0 drop-shadow-[0_18px_24px_rgba(0,0,0,0.35)]" />
+                <PrizeVisual
+                  kind={raffle.kind}
+                  hue={raffle.hue}
+                  imageUrl={raffle.imageUrl}
+                  rounded="rounded-2xl ring-1 ring-white/25"
+                  className="h-32 w-32 shrink-0 drop-shadow-[0_18px_24px_rgba(0,0,0,0.35)]"
+                />
                 <div className="min-w-0">
                   <Chip tone="neutral" className="bg-ink/40 text-white backdrop-blur" icon={status === 'drawing' ? <Spinner className="h-3 w-3" /> : undefined}>
                     {STATUS_LABEL[status]}
@@ -115,7 +122,7 @@ export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, o
 
             <section>
               <h4 className="flex items-center gap-2 text-[15px] font-bold">
-                <Trophy size={16} className="text-sun" /> Three winners
+                <Trophy size={16} className="text-sun" /> {raffle.winners.length === 1 ? 'The prize' : winnersLabel(raffle.winners.length)}
               </h4>
               <div className="mt-2">
                 {status === 'drawing' || status === 'drawn' ? (
@@ -124,8 +131,8 @@ export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, o
                   <ol className="flex flex-col gap-2">
                     {raffle.winners.map((w) => (
                       <li key={w.position} className="flex items-center gap-3 rounded-2xl bg-white/5 p-3">
-                        <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl font-display text-[13px] font-extrabold', ['bg-sunny text-ink', 'bg-white/80 text-ink', 'bg-[#d9a066] text-ink'][w.position - 1])}>
-                          {['1st', '2nd', '3rd'][w.position - 1]}
+                        <span className={cn('flex h-9 min-w-9 shrink-0 items-center justify-center rounded-xl px-1.5 font-display text-[13px] font-extrabold', medalClass(w.position))}>
+                          {prizeLabel(w.position, raffle.winners.length)}
                         </span>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-[15px] font-bold">{w.prizeItem}</p>

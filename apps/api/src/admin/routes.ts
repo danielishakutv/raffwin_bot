@@ -2,13 +2,16 @@
  * /admin/v1 - served same-origin from the app host (Apache proxies
  * /admin/v1 to the API), so admin requests never cross origins.
  */
-import { Router, type Request } from 'express'
+import express, { Router, type Request } from 'express'
 import { z } from 'zod'
 import {
   adjustmentBody,
   decisionBody,
   expenseBody,
   limitsBody,
+  MEDIA_MAX_BYTES,
+  MEDIA_TYPES,
+  mediaFetchBody,
   raffleBody,
   rateBaseBody,
   reasonBody,
@@ -28,6 +31,7 @@ import { permissionsOf } from './permissions'
 import { adminOf, auditEveryRequest, exchangeTicket, idleMinutesFor, logout, requireAdmin, requirePermission, resumeSession } from './session'
 import * as admins from './admins'
 import * as finance from './finance'
+import { fetchRemoteImage, storeUpload } from '../services/media'
 import type { Period } from './finance'
 
 const uuid = z.string().uuid()
@@ -113,6 +117,24 @@ export function adminRoutes(ctx: AppContext): Router {
   })
   r.put('/raffles/:id', authed, perm('raffles.write'), async (req, res) => {
     res.json(await ops.updateRaffle(ctx, adminId(req), idParam(req), raffleBody.parse(req.body), isSuper(req)))
+  })
+  // A raffle photo, sent as the raw image (the app shrinks it first). Returns the path to put in imageUrl.
+  r.post(
+    '/media',
+    authed,
+    perm('raffles.write'),
+    express.raw({ type: [...MEDIA_TYPES], limit: MEDIA_MAX_BYTES }),
+    async (req, res) => {
+      res.status(201).json(await storeUpload(ctx, adminId(req), req.body))
+    },
+  )
+  // Import from a link: the API downloads the original (guarded against private addresses) and hands it
+  // back for the app to shrink under 500 KB and upload, so no external image ever reaches players
+  r.post('/media/fetch', authed, perm('raffles.write'), async (req, res) => {
+    const { url } = mediaFetchBody.parse(req.body)
+    const image = await fetchRemoteImage(url)
+    res.set({ 'Content-Type': image.mime, 'Content-Length': String(image.bytes.length), 'Content-Security-Policy': "default-src 'none'; sandbox" })
+    res.end(image.bytes)
   })
   r.post('/raffles/:id/open', authed, perm('raffles.write'), async (req, res) => {
     res.json(await ops.openRaffle(ctx, adminId(req), idParam(req)))

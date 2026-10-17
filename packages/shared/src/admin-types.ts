@@ -21,7 +21,7 @@ export interface AdminLoginResponse {
 }
 
 export interface AdminPrize {
-  position: 1 | 2 | 3
+  position: number
   prizeItem: string
   prizeType: 'physical' | 'raffs_credit'
   raffsValue: number
@@ -39,6 +39,7 @@ export interface AdminRaffle {
   category: string
   kind: string
   hue: number
+  imageUrl: string | null
   marketPriceNaira: number
   entryPriceRaffs: number
   entriesTarget: number
@@ -160,7 +161,7 @@ export interface AdminExpense {
 }
 
 export interface FinancePrize {
-  position: 1 | 2 | 3
+  position: number
   prizeItem: string
   prizeType: 'physical' | 'raffs_credit'
   /** Physical: what you paid. Raffs credit: its Raffs value at the report rate */

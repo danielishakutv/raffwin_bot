@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { prizeLabel, winnersLabel } from './prizes'
 import { isReferralCode, parseStartParam, referralEarning, REFERRAL_CODE_ALPHABET } from './referral'
 import { normalizeNigerianPhone } from './phone'
 import { kycBody, profilePatchBody } from './schemas'
@@ -99,5 +100,14 @@ describe('schemas', () => {
   })
   it('refuses an empty profile patch', () => {
     expect(profilePatchBody.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('prize places', () => {
+  it('names a single prize "Prize" and places after that in order', () => {
+    expect(prizeLabel(1, 1)).toBe('Prize')
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map((n) => prizeLabel(n, 200))).toEqual(['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '23rd', '101st', '111th'])
+    expect(winnersLabel(1)).toBe('1 winner')
+    expect(winnersLabel(4)).toBe('4 winners')
   })
 })

@@ -8,7 +8,7 @@ import { Avatar } from '@/components/ui/Avatar'
 import { BouncyButton } from '@/components/ui/BouncyButton'
 import { cn } from '@/components/ui/cn'
 import { Countdown } from '@/components/ui/Countdown'
-import { PrizeArt } from '@/components/ui/PrizeArt'
+import { PrizeVisual } from '@/components/ui/PrizeVisual'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { RateChip } from '@/components/ui/RateChip'
 import { Sparkline } from '@/components/ui/Sparkline'
@@ -165,7 +165,7 @@ export function DashboardPage() {
           </div>
           <div className="mt-2 flex items-center gap-3">
             <div className="h-16 w-16 shrink-0 rounded-2xl bg-white/5 p-1">
-              <PrizeArt kind={stats.nextDraw.kind} hue={stats.nextDraw.hue} className="h-full w-full" />
+              <PrizeVisual kind={stats.nextDraw.kind} hue={stats.nextDraw.hue} imageUrl={stats.nextDraw.imageUrl} rounded="rounded-xl" className="h-full w-full" />
             </div>
             <div className="min-w-0 flex-1">
               <h3 className="truncate text-[16px] font-bold">{stats.nextDraw.prizeName}</h3>
@@ -206,7 +206,7 @@ export function DashboardPage() {
                 className="tap surface flex items-center gap-3 rounded-2xl p-3 text-left active:scale-[0.98] transition-transform"
               >
                 <div className="h-12 w-12 shrink-0 rounded-xl bg-white/5">
-                  <PrizeArt kind={r.kind} hue={r.hue} className="h-full w-full" />
+                  <PrizeVisual kind={r.kind} hue={r.hue} imageUrl={r.imageUrl} rounded="rounded-xl" className="h-full w-full" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[14px] font-bold">{r.prizeName}</p>

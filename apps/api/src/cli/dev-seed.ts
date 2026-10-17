@@ -58,7 +58,7 @@ async function main() {
             status: 'open',
             openedAt: new Date(),
             description: 'Development sample raffle.',
-            rules: ['One draw, three winners.'],
+            rules: ['One draw: 1st, 2nd and 3rd place.'],
           })
           .returning({ id: raffles.id })
         if (!row) throw new Error('raffle insert returned no row')

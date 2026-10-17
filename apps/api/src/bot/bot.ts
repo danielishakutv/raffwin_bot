@@ -60,7 +60,7 @@ export function createBot(opts: BotOptions): Bot {
       [
         `<b>Welcome to Raffle Win, ${name}!</b>`,
         '',
-        'Enter raffles for phones, laptops, TVs and more, and watch the draw happen live. Every raffle has three winners.',
+        'Enter raffles for phones, laptops, TVs and more, and watch the draw happen live. Each raffle shows its prizes and how many winners it has.',
         '',
         'Tap the button below to open the app. There is nothing to sign up for.',
         envNote,
@@ -91,7 +91,7 @@ export function createBot(opts: BotOptions): Bot {
         '',
         '1. You must be 18+ and resident in Nigeria. One account per person.',
         '2. Each raffle has a fixed entry price in Raffs and a deadline. Entries close at the deadline.',
-        '3. One draw per raffle, three winners: 1st, 2nd and 3rd place.',
+        '3. One draw per raffle. A raffle has one prize or several (1st, 2nd, 3rd and so on); one ticket wins one prize.',
         '4. Winners give their name, phone and nearest motor park on the KYC page. Prizes are delivered to that motor park, never to a home address.',
         envNote,
       ].join('\n'),

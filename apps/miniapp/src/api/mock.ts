@@ -22,7 +22,7 @@ import type {
   Transaction,
   VerificationStatus,
 } from '@/data/types'
-import { normalizeNigerianPhone } from '@raffwin/shared'
+import { normalizeNigerianPhone, ordinal } from '@raffwin/shared'
 import { getTelegramUser } from '@/services/telegram'
 import { TAKEN_USERNAMES, seedHistoryForUser } from '@/data/seed'
 import { getRaffleStatus, isEnterable } from '@/data/raffleStatus'
@@ -334,7 +334,7 @@ export async function enterRaffle(req: EnterRaffleRequest): Promise<EnterRaffleR
 /**
  * Runs the draw for a raffle whose deadline has passed. Demo rule: winners are
  * picked at random from the entrants; if the signed-in user entered, they are
- * guaranteed one of the three slots so the win flow can be demonstrated.
+ * guaranteed one of the slots so the win flow can be demonstrated.
  * Raffs-credit prizes are paid into the balance immediately.
  */
 export async function drawRaffle(raffleId: string): Promise<{ raffle: Raffle; balance: number; youWon: boolean }> {
@@ -354,8 +354,9 @@ export async function drawRaffle(raffleId: string): Promise<{ raffle: Raffle; ba
         const j = Math.floor(Math.random() * (i + 1))
         ;[pool[i], pool[j]] = [pool[j], pool[i]]
       }
-      const picked = pool.slice(0, 3)
-      if (iEntered && me) picked.splice(Math.floor(Math.random() * 3), 0, me)
+      const places = raffle.winners.length
+      const picked = pool.slice(0, places)
+      if (iEntered && me) picked.splice(Math.floor(Math.random() * places), 0, me)
       raffle.winners.forEach((slot, i) => {
         slot.username = picked[i] ?? pool[i] ?? null
       })
@@ -374,7 +375,7 @@ export async function drawRaffle(raffleId: string): Promise<{ raffle: Raffle; ba
             raffs,
             naira: null,
             stars: null,
-            note: `${['1st', '2nd', '3rd'][mySlot.position - 1]} place prize: ${raffle.prizeName} raffle`,
+            note: `${places === 1 ? 'Prize' : `${ordinal(mySlot.position)} place prize`}: ${raffle.prizeName} raffle`,
             createdAt: raffle.drawnAt,
             status: 'completed',
           })

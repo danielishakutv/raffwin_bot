@@ -7,7 +7,7 @@ import { Chip } from '@/components/ui/Chip'
 import { Countdown } from '@/components/ui/Countdown'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/ui/PageHeader'
-import { PrizeArt } from '@/components/ui/PrizeArt'
+import { PrizeVisual } from '@/components/ui/PrizeVisual'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { useBackButton } from '@/hooks/useBackButton'
 import { useNow } from '@/hooks/useNow'
@@ -54,7 +54,7 @@ export function EntriesPage() {
                   className="tap surface flex w-full items-center gap-3 rounded-2xl p-3 text-left"
                 >
                   <div className="h-14 w-14 shrink-0 rounded-xl bg-white/5">
-                    <PrizeArt kind={raffle.kind} hue={raffle.hue} className="h-full w-full" />
+                    <PrizeVisual kind={raffle.kind} hue={raffle.hue} imageUrl={raffle.imageUrl} rounded="rounded-xl" className="h-full w-full" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">

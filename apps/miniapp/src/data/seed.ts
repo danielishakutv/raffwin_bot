@@ -61,7 +61,7 @@ const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
 
 const commonRules = [
-  'One draw per raffle. Three winners are selected: 1st, 2nd and 3rd place.',
+  'One draw per raffle. Each prize listed has its own winner: 1st, 2nd, 3rd and so on.',
   'Entries close at the deadline shown. Entries after the deadline are not possible.',
   'Each entry is one ticket in the draw. More entries, more tickets.',
   'Winners are contacted on Telegram and must confirm within 7 days.',
@@ -80,7 +80,7 @@ export function seedRaffles(now: number): Raffle[] {
   // Demo raffles are written in Naira (easier to read) and priced in fixed Raffs
   // at the demo base of BASE_NAIRA_PER_RAFF, exactly like the real API prices them.
   const r = (
-    partial: Omit<Raffle, 'entriesTarget' | 'rules' | 'entrants' | 'winners' | 'entryPriceRaffs' | 'seedCommitment'> & {
+    partial: Omit<Raffle, 'entriesTarget' | 'rules' | 'entrants' | 'winners' | 'entryPriceRaffs' | 'seedCommitment' | 'imageUrl'> & {
       entryPriceNaira: number
       poolTargetNaira: number
       winners: [string, string, string]
@@ -100,6 +100,7 @@ export function seedRaffles(now: number): Raffle[] {
     } = partial
     return {
       ...rest,
+      imageUrl: null,
       entryPriceRaffs: Math.ceil(entryPriceNaira / BASE_NAIRA_PER_RAFF),
       seedCommitment: null,
       entriesTarget: Math.round(poolTargetNaira / entryPriceNaira),
