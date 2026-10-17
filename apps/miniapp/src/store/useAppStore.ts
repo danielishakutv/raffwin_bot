@@ -6,15 +6,19 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { defaultFeatures, FEATURE_KEYS, type FeatureMap } from '@raffwin/shared'
 import * as api from '@/api'
 import type {
+  Bootstrap,
   LiveSnapshot,
   ContactPrefs,
   Entry,
   Profile,
   Raffle,
   KycInput,
+  StreakState,
   Transaction,
+  TransferResult,
   VerificationStatus,
   WinnerSlot,
 } from '@/data/types'
@@ -44,6 +48,12 @@ export interface AppState {
   rate: RateQuote | null
   rateStatus: RateStatus
   settings: Settings
+  /** Effective feature switches for this player: from bootstrap, then every live poll */
+  features: FeatureMap
+  /** Raffs a come-back offer just credited, until the app has said so once */
+  welcomeBack: { raffs: number } | null
+  /** Daily streak (feature daily_streak); null until loaded */
+  streak: StreakState | null
 
   boot: () => Promise<void>
   /** Merges a polled snapshot; fetches full data only for what it shows has changed */
@@ -51,6 +61,8 @@ export interface AppState {
   /** Full reload of everything (used when the app comes back to the foreground) */
   refreshAll: () => Promise<void>
   setLiveError: (message: string | null) => void
+  /** The welcome-back message has been shown */
+  consumeWelcomeBack: () => void
   saveKyc: (input: KycInput) => Promise<void>
   completeOnboarding: () => Promise<void>
   refreshRate: () => Promise<void>
@@ -65,6 +77,17 @@ export interface AppState {
   buyRaffs: (req: Omit<api.BuyRaffsRequest, 'rateId'>) => Promise<api.BuyRaffsResponse>
   updateProfile: (patch: Partial<Pick<Profile, 'fullName' | 'phone' | 'email' | 'username'>>) => Promise<void>
   updateContactPrefs: (prefs: ContactPrefs) => Promise<void>
+  /** Saves the phone from a Telegram contact share (demo: a typed number) */
+  savePhone: (contactProof: string) => Promise<Profile>
+  /** Re-reads the profile (after the player shared their phone in the bot chat) */
+  refreshProfile: () => Promise<Profile>
+  setReminders: (on: boolean) => Promise<void>
+  loadStreak: () => Promise<StreakState>
+  claimStreak: () => Promise<{ raffs: number; state: StreakState }>
+  /** idempotencyKey: one per confirmation, reused on retry, so a lost reply never sends twice */
+  sendRaffs: (req: api.SendRaffsRequest) => Promise<TransferResult>
+  /** Demo control: what a super admin's feature switch does */
+  setDemoFeature: (key: keyof FeatureMap, on: boolean) => Promise<void>
   submitVerification: (input: { idImage: string; selfieImage: string }) => Promise<void>
   setVerificationStatus: (status: VerificationStatus) => Promise<void>
   resetDemo: () => Promise<void>
@@ -75,6 +98,26 @@ export interface AppState {
 }
 
 let rateInFlight: Promise<void> | null = null
+let streakInFlight: Promise<StreakState> | null = null
+
+function sameFeatures(a: FeatureMap, b: FeatureMap): boolean {
+  return FEATURE_KEYS.every((k) => a[k] === b[k])
+}
+
+/**
+ * The store's part of a bootstrap. A come-back credit is kept until shown
+ * (a later bootstrap without one must not erase it), and a bootstrap from an
+ * API that predates feature switches leaves every feature at its default.
+ */
+function fromBootstrap(data: Bootstrap, current: AppState) {
+  const { welcomeBack, features, ...rest } = data
+  const nextFeatures = features ?? defaultFeatures()
+  return {
+    ...rest,
+    features: sameFeatures(nextFeatures, current.features) ? current.features : nextFeatures,
+    welcomeBack: welcomeBack ?? current.welcomeBack,
+  }
+}
 /** Raffle content versions from the previous live poll (null until the first one) */
 let liveVersions: Map<string, string> | null = null
 
@@ -94,9 +137,16 @@ export const useAppStore = create<AppState>()(
       rate: null,
       rateStatus: 'idle',
       settings: { muted: false, music: false, swipeHintSeen: false },
+      features: defaultFeatures(),
+      welcomeBack: null,
+      streak: null,
 
       async applyLive(live) {
-        const { raffles, balance } = get()
+        const { raffles, balance, features } = get()
+        // A feature switched on or off shows or hides its screens within seconds
+        if (live.features && !sameFeatures(live.features, features)) {
+          set({ features: live.features, ...(live.features.daily_streak ? {} : { streak: null }) })
+        }
         const known = new Map(raffles.map((r) => [r.id, r]))
         const seen = liveVersions
         liveVersions = new Map(live.raffles.map((l) => [l.id, l.version]))
@@ -135,11 +185,19 @@ export const useAppStore = create<AppState>()(
 
       async refreshAll() {
         const data = await api.getBootstrap()
-        set({ ...data })
+        set(fromBootstrap(data, get()))
+        // The streak may have rolled over to a new day while the app was in the background
+        if (get().features.daily_streak && get().streak) {
+          get().loadStreak().catch((error: unknown) => console.warn('[streak] reload after returning failed', error))
+        }
       },
 
       setLiveError(message) {
         if (get().liveError !== message) set({ liveError: message })
+      },
+
+      consumeWelcomeBack() {
+        set({ welcomeBack: null })
       },
 
       async boot() {
@@ -147,7 +205,7 @@ export const useAppStore = create<AppState>()(
         set({ booting: true, bootError: null })
         try {
           const data = await api.getBootstrap()
-          set({ ...data, booted: true, booting: false })
+          set({ ...fromBootstrap(data, get()), booted: true, booting: false })
         } catch (error) {
           set({ booting: false, bootError: error instanceof Error ? error.message : 'Could not load the app.' })
         }
@@ -250,6 +308,63 @@ export const useAppStore = create<AppState>()(
         set({ profile })
       },
 
+      async savePhone(contactProof) {
+        const profile = await api.savePhone(contactProof)
+        set({ profile })
+        return profile
+      },
+
+      async refreshProfile() {
+        const profile = await api.getProfile()
+        set({ profile })
+        return profile
+      },
+
+      async setReminders(on) {
+        const profile = await api.setReminders(on)
+        set({ profile })
+      },
+
+      async loadStreak() {
+        if (streakInFlight) return streakInFlight
+        streakInFlight = api
+          .getStreak()
+          .then((streak) => {
+            set({ streak })
+            return streak
+          })
+          .finally(() => {
+            streakInFlight = null
+          })
+        return streakInFlight
+      },
+
+      async claimStreak() {
+        const res = await api.claimStreak()
+        set({ streak: res.state, balance: res.balance })
+        // Show the bonus line in the history (setting the balance stops the live poll from doing it)
+        api.getTransactions().then(
+          (transactions) => set({ transactions }),
+          (error: unknown) => console.warn('[streak] could not reload transactions after a claim', error),
+        )
+        return { raffs: res.raffs, state: res.state }
+      },
+
+      async sendRaffs(req) {
+        const res = await api.sendRaffs(req)
+        set({ balance: res.balance })
+        api.getTransactions().then(
+          (transactions) => set({ transactions }),
+          (error: unknown) => console.warn('[transfer] could not reload transactions after sending', error),
+        )
+        return res
+      },
+
+      async setDemoFeature(key, on) {
+        const features = await api.setDemoFeature(key, on)
+        set({ features, ...(features.daily_streak ? {} : { streak: null }) })
+      },
+
       async submitVerification(input) {
         const profile = await api.submitVerification(input)
         set({ profile })
@@ -262,13 +377,13 @@ export const useAppStore = create<AppState>()(
 
       async resetDemo() {
         const data = await api.resetDemo()
-        set({ ...data, settings: { ...get().settings, swipeHintSeen: false } })
+        set({ ...fromBootstrap(data, get()), streak: null, settings: { ...get().settings, swipeHintSeen: false } })
       },
 
       async signOut() {
         await api.signOut()
         const data = await api.getBootstrap()
-        set({ ...data })
+        set({ ...fromBootstrap(data, get()), streak: null, welcomeBack: null })
       },
 
       setMuted(muted) {

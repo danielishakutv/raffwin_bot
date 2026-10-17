@@ -18,6 +18,11 @@
  * keep it in Telegram's secure storage on their phone; reopening the Mini App
  * resumes it only with fresh initData from the bound account (resumeSession). Every login attempt
  * and every admin request is written to the hash-chained audit log.
+ *
+ * Since 17 Oct there is also a browser (desktop) sign-in with the same
+ * secrets, where the possession factor is a 6-digit code the bot sends to the
+ * bound Telegram account (admin/web-login.ts). Its sessions are the same
+ * bearer tokens with channel 'browser', the same limits, and no resume.
  */
 import { hash as argonHash, verify as argonVerify } from '@node-rs/argon2'
 import { and, eq, gt, isNull, sql } from 'drizzle-orm'
@@ -25,11 +30,14 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import { z } from 'zod'
 import type { AppContext } from '../context'
 import { adminSessions, adminTickets, adminUsers, type AdminUserRow } from '../db/schema'
+
+type AdminSessionRow = typeof adminSessions.$inferSelect
 import { newRefreshToken, sha256Hex } from '../lib/crypto'
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
 import { readInitDataUser, verifyTelegramData } from '../lib/telegram-auth'
 import { requestMeta } from '../http/middleware'
+import type { Tx } from '../services/ledger'
 import { appendAudit } from './audit'
 import { can, type Permission } from './permissions'
 
@@ -40,16 +48,25 @@ export function idleMinutesFor(ctx: AppContext, role: AdminUserRow['role']): num
   return role === 'super_admin' ? ctx.config.ADMIN_SUPER_IDLE_MINUTES : ctx.config.ADMIN_IDLE_MINUTES
 }
 
+/** How a session signed in: the bot's Open admin button, or the browser sign-in (admin/web-login.ts) */
+export type AdminChannel = AdminSessionRow['channel']
+
+export interface AdminCaller {
+  user: AdminUserRow
+  sessionId: string
+  channel: AdminChannel
+}
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace -- Express's own extension point
   namespace Express {
     interface Request {
-      admin?: { user: AdminUserRow; sessionId: string }
+      admin?: AdminCaller
     }
   }
 }
 
-export function adminOf(req: Request): { user: AdminUserRow; sessionId: string } {
+export function adminOf(req: Request): AdminCaller {
   if (!req.admin) throw new Error('adminOf() used on a route without requireAdmin')
   return req.admin
 }
@@ -148,22 +165,12 @@ export async function exchangeTicket(ctx: AppContext, req: Request): Promise<Adm
     const [admin] = await tx.select().from(adminUsers).where(eq(adminUsers.id, t.adminId))
     if (!admin || admin.status !== 'active' || admin.telegramId !== tg.id) return { kind: 'admin_unavailable' as const }
     await tx.update(adminTickets).set({ usedAt: new Date(now) }).where(eq(adminTickets.id, t.id))
-    const token = newRefreshToken()
-    const expiresAt = now + ctx.config.ADMIN_SESSION_HOURS * 3_600_000
-    await tx.insert(adminSessions).values({
-      adminId: admin.id,
-      tokenHash: sha256Hex(token),
+    const { token, expiresAt } = await openSession(ctx, tx, {
+      admin,
+      channel: 'telegram',
       ipHash: meta.ipHash,
-      userAgent: req.get('user-agent')?.slice(0, 400) ?? null,
-      expiresAt: new Date(expiresAt),
-    })
-    await appendAudit(tx, {
-      adminId: admin.id,
-      action: 'admin.session.start',
-      targetType: 'admin',
-      targetId: admin.id,
-      after: { telegramId: tg.id },
-      ipHash: meta.ipHash,
+      userAgent: req.get('user-agent') ?? null,
+      auditAfter: { telegramId: tg.id },
     })
     return { kind: 'ok' as const, admin, token, expiresAt }
   })
@@ -174,6 +181,37 @@ export async function exchangeTicket(ctx: AppContext, req: Request): Promise<Adm
   return { admin: result.admin, token: result.token, expiresAt: result.expiresAt }
 }
 
+/**
+ * Creates a session row (bearer token: 8 h absolute, idle limit by role, the
+ * same for both channels) and audits admin.session.start, inside the caller's
+ * transaction so the session exists only if the sign-in that earned it commits.
+ */
+export async function openSession(
+  ctx: AppContext,
+  tx: Tx,
+  input: { admin: AdminUserRow; channel: AdminChannel; ipHash: string | null; userAgent: string | null; auditAfter: Record<string, unknown> },
+): Promise<{ token: string; expiresAt: number }> {
+  const token = newRefreshToken()
+  const expiresAt = ctx.now() + ctx.config.ADMIN_SESSION_HOURS * 3_600_000
+  await tx.insert(adminSessions).values({
+    adminId: input.admin.id,
+    tokenHash: sha256Hex(token),
+    ipHash: input.ipHash,
+    userAgent: input.userAgent?.slice(0, 400) ?? null,
+    expiresAt: new Date(expiresAt),
+    channel: input.channel,
+  })
+  await appendAudit(tx, {
+    adminId: input.admin.id,
+    action: 'admin.session.start',
+    targetType: 'admin',
+    targetId: input.admin.id,
+    after: input.auditAfter,
+    ipHash: input.ipHash,
+  })
+  return { token, expiresAt }
+}
+
 export const resumeBody = z.object({ initData: z.string().min(1).max(8192) })
 
 /**
@@ -182,9 +220,23 @@ export const resumeBody = z.object({ initData: z.string().min(1).max(8192) })
  * presented from any other account is revoked on the spot.
  */
 export async function resumeSession(ctx: AppContext, req: Request): Promise<{ expiresAt: number }> {
-  const { user, sessionId } = adminOf(req)
+  const { user, sessionId, channel } = adminOf(req)
   const body = resumeBody.parse(req.body)
   const meta = requestMeta(ctx, req)
+  // Resuming is the Mini App's way back in; a browser session simply carries on (or signs in again)
+  if (channel !== 'telegram') {
+    await recordSecurityEvent(ctx.db, ctx.log, {
+      severity: 'medium',
+      category: 'admin',
+      kind: 'admin_resume_browser_session',
+      ipHash: meta.ipHash,
+      route: meta.route,
+      requestId: meta.requestId,
+      details: { adminId: user.id },
+      actionTaken: 'blocked',
+    })
+    throw new HttpError('INVALID_INPUT', 'Only a session opened from the bot can be resumed in Telegram. Sign in again in the browser.')
+  }
   const verified = verifyTelegramData(body.initData, ctx.config.BOT_TOKEN, { maxAgeSeconds: ctx.config.INITDATA_MAX_AGE_SECONDS, now: ctx.now() })
   const tg = verified.ok ? readInitDataUser(verified.fields) : null
   if (!tg || tg.id !== user.telegramId) {
@@ -243,7 +295,7 @@ export function requireAdmin(ctx: AppContext): RequestHandler {
     if (now - row.session.lastSeenAt.getTime() > 60_000) {
       await ctx.db.update(adminSessions).set({ lastSeenAt: new Date(now) }).where(eq(adminSessions.id, row.session.id))
     }
-    req.admin = { user: row.admin, sessionId: row.session.id }
+    req.admin = { user: row.admin, sessionId: row.session.id, channel: row.session.channel }
     next()
   }
 }

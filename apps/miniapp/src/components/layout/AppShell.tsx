@@ -4,6 +4,7 @@ import { useLocation, useOutlet } from 'react-router-dom'
 import { TabBar } from './TabBar'
 import { cn } from '@/components/ui/cn'
 import { pageVariants } from '@/components/motion'
+import { WelcomeBack } from '@/features/welcome/WelcomeBack'
 import { useAppStore } from '@/store/useAppStore'
 
 const TAB_ROOTS = ['/home', '/raffles', '/wallet', '/profile']
@@ -36,6 +37,8 @@ export function AppShell() {
         </AnimatePresence>
       </main>
       {showTabs && <TabBar />}
+      {/* "Welcome back! 1 free Raff added", once, after a come-back offer is claimed */}
+      <WelcomeBack />
     </div>
   )
 }

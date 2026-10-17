@@ -19,12 +19,17 @@ import type {
   LiveSnapshot,
   Profile,
   Raffle,
+  StreakClaimResult,
+  StreakState,
   Transaction,
+  TransferLimits,
+  TransferRecipient,
+  TransferResult,
   VerificationStatus,
 } from '@/data/types'
-import { normalizeNigerianPhone, ordinal } from '@raffwin/shared'
+import { FEATURES, defaultFeatures, normalizeNigerianPhone, ordinal, type FeatureKey, type FeatureMap } from '@raffwin/shared'
 import { getTelegramUser } from '@/services/telegram'
-import { TAKEN_USERNAMES, seedHistoryForUser } from '@/data/seed'
+import { DEMO_ENTRANTS, TAKEN_USERNAMES, seedHistoryForUser } from '@/data/seed'
 import { getRaffleStatus, isEnterable } from '@/data/raffleStatus'
 import { getRateProvider, type RateQuote } from '@/services/rates'
 import { referralLink } from '@raffwin/shared'
@@ -44,7 +49,13 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
  */
 function ensureProfile(): Profile {
   const db = loadDb()
-  if (db.profile) return db.profile
+  if (db.profile) {
+    // Saved by a build from before bot reminders existed: they start switched on
+    if (typeof db.profile.remindersOn !== 'boolean') {
+      return mutateDb((d) => Object.assign(d.profile as Profile, { remindersOn: true }))
+    }
+    return db.profile
+  }
   const tg = getTelegramUser()
   const now = Date.now()
   const profile: Profile = {
@@ -62,6 +73,7 @@ function ensureProfile(): Profile {
     isAdmin: false,
     contactPrefs: { whatsapp: true, telegram: true, email: false },
     verification: { status: 'unverified', idImage: null, selfieImage: null, submittedAt: null },
+    remindersOn: true,
   }
   return mutateDb((d) => {
     d.profile = profile
@@ -75,6 +87,32 @@ function ensureProfile(): Profile {
 
 function requireProfile(): Profile {
   return ensureProfile()
+}
+
+/* ----------------------------------------------------------------------------
+ * Feature switches. The demo turns on the two player features (Send Raffs,
+ * daily streak) so they can be seen; the demo controls switch them.
+ * -------------------------------------------------------------------------- */
+
+function demoFeatures(): FeatureMap {
+  return { ...defaultFeatures(), raffs_transfer: true, daily_streak: true }
+}
+
+function featuresNow(): FeatureMap {
+  return { ...demoFeatures(), ...(loadDb().features ?? {}) }
+}
+
+function requireFeature(key: FeatureKey): void {
+  if (!featuresNow()[key]) throw new ApiError('FEATURE_OFF', `${FEATURES[key].name} is not available right now.`)
+}
+
+/** Demo control only: what a super admin's switch does in the real app. */
+export async function setDemoFeature(key: FeatureKey, on: boolean): Promise<FeatureMap> {
+  await jitter(200)
+  mutateDb((db) => {
+    db.features = { ...(db.features ?? {}), [key]: on }
+  })
+  return featuresNow()
 }
 
 /* ----------------------------------------------------------------------------
@@ -92,6 +130,9 @@ export async function getBootstrap(): Promise<Bootstrap> {
     raffles: db.raffles,
     entries: db.entries,
     transactions: db.transactions,
+    features: featuresNow(),
+    // The demo has no bot, so nobody is ever away long enough for a come-back offer
+    welcomeBack: null,
   })
 }
 
@@ -184,6 +225,58 @@ export async function updateContactPrefs(prefs: ContactPrefs): Promise<Profile> 
   )
 }
 
+/** The phone number inside a Telegram contact share (display data; the real API verifies the signature). */
+function phoneFromProof(proof: string): string | null {
+  try {
+    const contact = new URLSearchParams(proof).get('contact')
+    if (!contact) return null
+    const parsed = JSON.parse(contact) as { phone_number?: unknown }
+    return typeof parsed.phone_number === 'string' ? parsed.phone_number : null
+  } catch (error) {
+    console.info('[mock] contact share not readable, treating it as a typed demo number', error)
+    return null
+  }
+}
+
+/**
+ * Phone in the demo: inside Telegram the share carries the number; in a plain
+ * browser there is nothing to share, so the demo passes the typed number.
+ */
+export async function savePhone(contactProof: string): Promise<Profile> {
+  await jitter(600, 300)
+  requireProfile()
+  const fromTelegram = phoneFromProof(contactProof)
+  const phone = normalizeNigerianPhone(fromTelegram ?? contactProof)
+  if (!phone) {
+    throw new ApiError(
+      'PHONE_NOT_VERIFIED',
+      fromTelegram
+        ? 'Your Telegram account uses a number outside Nigeria. Raffle Win delivers in Nigeria only.'
+        : 'Enter a Nigerian mobile number, like 0803 123 4567.',
+    )
+  }
+  return clone(
+    mutateDb((db) => {
+      const p = db.profile as Profile
+      p.phone = phone
+      p.phoneVerified = !!fromTelegram
+      return p
+    }),
+  )
+}
+
+export async function setReminders(on: boolean): Promise<Profile> {
+  await jitter(250)
+  requireProfile()
+  return clone(
+    mutateDb((db) => {
+      const p = db.profile as Profile
+      p.remindersOn = on
+      return p
+    }),
+  )
+}
+
 export async function submitVerification(input: {
   idImage: string
   selfieImage: string
@@ -245,6 +338,7 @@ export async function getLive(): Promise<LiveSnapshot> {
   return {
     serverTime: Date.now(),
     balance: db.balance,
+    features: featuresNow(),
     raffles: db.raffles.map((r) => ({
       id: r.id,
       entriesCount: r.entriesCount,
@@ -288,7 +382,10 @@ export interface EnterRaffleResponse {
 
 export async function enterRaffle(req: EnterRaffleRequest): Promise<EnterRaffleResponse> {
   await jitter(900, 500)
-  requireProfile()
+  const me = requireProfile()
+  if (featuresNow().require_phone_for_entry && !me.phone) {
+    throw new ApiError('PHONE_REQUIRED', 'Share your phone number first, so we can reach you if you win.')
+  }
   const now = Date.now()
   return clone(
     mutateDb((db) => {
@@ -451,6 +548,166 @@ export async function getTransactions(): Promise<Transaction[]> {
 export async function getEntries(): Promise<Entry[]> {
   await jitter(300)
   return clone(loadDb().entries)
+}
+
+/* ----------------------------------------------------------------------------
+ * Daily streak (feature daily_streak). Same rules as the API: Lagos days,
+ * yesterday claimed -> streak + 1, else 1; past the end the last reward repeats.
+ * -------------------------------------------------------------------------- */
+
+const DEMO_STREAK_REWARDS = [1, 1, 2, 2, 3, 3, 5]
+
+/** YYYY-MM-DD in Lagos (UTC+1 all year, no DST). */
+function lagosDay(ms: number): string {
+  return new Date(ms + 3_600_000).toISOString().slice(0, 10)
+}
+
+function dayBefore(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - 1)
+  return d.toISOString().slice(0, 10)
+}
+
+function streakReward(day: number): number {
+  return DEMO_STREAK_REWARDS[Math.min(day, DEMO_STREAK_REWARDS.length) - 1]
+}
+
+function streakState(checkins: { day: string; streak: number }[], now: number): StreakState {
+  const today = lagosDay(now)
+  const last = checkins[0] ?? null
+  const claimedToday = last?.day === today
+  const alive = !!last && (claimedToday || last.day === dayBefore(today))
+  const current = alive && last ? last.streak : 0
+  return {
+    current,
+    claimedToday,
+    nextReward: streakReward(current + 1),
+    rewards: [...DEMO_STREAK_REWARDS],
+    lastClaimedDay: last?.day ?? null,
+    best: checkins.reduce((max, c) => Math.max(max, c.streak), 0),
+  }
+}
+
+export async function getStreak(): Promise<StreakState> {
+  await jitter(250)
+  requireProfile()
+  requireFeature('daily_streak')
+  return streakState(loadDb().checkins ?? [], Date.now())
+}
+
+export async function claimStreak(): Promise<StreakClaimResult> {
+  await jitter(600, 300)
+  requireProfile()
+  requireFeature('daily_streak')
+  const now = Date.now()
+  return clone(
+    mutateDb((db) => {
+      const checkins = db.checkins ?? []
+      const before = streakState(checkins, now)
+      if (before.claimedToday) throw new ApiError('ALREADY_CLAIMED', 'You have already claimed today. Come back tomorrow.')
+      const streak = before.current + 1
+      const raffs = streakReward(streak)
+      db.checkins = [{ day: lagosDay(now), streak }, ...checkins]
+      db.balance += raffs
+      db.transactions.unshift({
+        id: newId('tx'),
+        type: 'bonus',
+        raffs,
+        naira: null,
+        stars: null,
+        note: `Daily streak day ${streak}`,
+        createdAt: new Date(now).toISOString(),
+        status: 'completed',
+      })
+      return { state: streakState(db.checkins, now), raffs, balance: db.balance }
+    }),
+  )
+}
+
+/* ----------------------------------------------------------------------------
+ * Send Raffs (feature raffs_transfer). The demo's other players are the
+ * invented entrants; Raffs sent to them leave the demo balance.
+ * -------------------------------------------------------------------------- */
+
+const DEMO_TRANSFER_MIN = 1
+const DEMO_TRANSFER_DAILY_MAX = 1000
+const NOT_PLAYERS = ['admin', 'raffle', 'raffwin', 'support', 'test']
+
+export interface SendRaffsRequest {
+  /** Recipient's username, with or without @ */
+  to: string
+  raffs: number
+  /** One per confirmation tap: a retry with the same key returns the same transfer */
+  idempotencyKey: string
+  note?: string
+}
+
+function sentToday(db: { transfers?: { result: TransferResult }[] }, now: number): number {
+  const today = lagosDay(now)
+  return (db.transfers ?? []).filter((t) => lagosDay(new Date(t.result.createdAt).getTime()) === today).reduce((sum, t) => sum + t.result.raffs, 0)
+}
+
+function demoRecipient(raw: string): TransferRecipient {
+  const username = raw.trim().replace(/^@/, '').toLowerCase()
+  const me = requireProfile()
+  if (username === me.username) throw new ApiError('INVALID_INPUT', 'That is your own username. Send Raffs to another player.')
+  const known = (DEMO_ENTRANTS as readonly string[]).includes(username) || (TAKEN_USERNAMES as readonly string[]).includes(username)
+  if (!known || NOT_PLAYERS.includes(username)) throw new ApiError('NOT_FOUND', 'No Raffle Win player with that username.')
+  const first = username.split('_')[0]
+  return { username, displayName: first.charAt(0).toUpperCase() + first.slice(1) }
+}
+
+export async function getTransferLimits(): Promise<TransferLimits> {
+  await jitter(200)
+  requireProfile()
+  requireFeature('raffs_transfer')
+  return { minRaffs: DEMO_TRANSFER_MIN, dailyMaxRaffs: DEMO_TRANSFER_DAILY_MAX, sentToday: sentToday(loadDb(), Date.now()) }
+}
+
+export async function findRecipient(username: string): Promise<TransferRecipient> {
+  await jitter(300, 200)
+  requireFeature('raffs_transfer')
+  return demoRecipient(username)
+}
+
+export async function sendRaffs(req: SendRaffsRequest): Promise<TransferResult> {
+  await jitter(900, 400)
+  const me = requireProfile()
+  requireFeature('raffs_transfer')
+  const done = (loadDb().transfers ?? []).find((t) => t.key === req.idempotencyKey)
+  if (done) return clone(done.result)
+  if (!me.phone) throw new ApiError('PHONE_REQUIRED', 'Share your phone number first. Sending Raffs needs a verified phone.')
+  const to = demoRecipient(req.to)
+  const raffs = Math.floor(req.raffs)
+  if (raffs < DEMO_TRANSFER_MIN) throw new ApiError('INVALID_INPUT', `Send at least ${DEMO_TRANSFER_MIN} Raff.`)
+  const now = Date.now()
+  return clone(
+    mutateDb((db) => {
+      const left = DEMO_TRANSFER_DAILY_MAX - sentToday(db, now)
+      if (raffs > left) {
+        throw new ApiError(
+          'LIMIT_REACHED',
+          left > 0 ? `You can send ${left} more Raffs today.` : 'You have sent the most allowed today. Try again tomorrow.',
+        )
+      }
+      if (db.balance < raffs) throw new ApiError('INSUFFICIENT_FUNDS', `You have ${db.balance} Raffs, not enough to send ${raffs}.`)
+      db.balance -= raffs
+      const createdAt = new Date(now).toISOString()
+      const result: TransferResult = { id: newId('tr'), toUsername: to.username, raffs, balance: db.balance, createdAt }
+      db.transfers = [{ key: req.idempotencyKey, result }, ...(db.transfers ?? [])]
+      db.transactions.unshift({
+        id: newId('tx'),
+        type: 'transfer_out',
+        raffs: -raffs,
+        naira: null,
+        stars: null,
+        note: `Sent to @${to.username}`,
+        createdAt,
+        status: 'completed',
+      })
+      return result
+    }),
+  )
 }
 
 /* ----------------------------------------------------------------------------

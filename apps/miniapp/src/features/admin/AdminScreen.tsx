@@ -1,34 +1,42 @@
 /**
  * The admin screen, inside the Mini App. Plain black and white on purpose.
- * Reached only through the bot's admin sign-in (adminSession.ts); every
- * request it makes is written to the audit log by the API.
+ * Reached through the bot's admin sign-in inside Telegram, or in a normal
+ * browser through the desktop sign-in (WebSignIn: same secrets plus a code
+ * from the bot). Every request it makes is written to the audit log by the API.
  *
  * Phones get a sticky header with a sideways-scrolling tab strip; wide
  * screens get a sidebar. Tabs live in ./tabs and ./raffles.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BarChart3, ClipboardCheck, Cog, Gift, Lock, ScrollText, ShieldAlert, UserCog, Users, Wallet } from 'lucide-react'
+import { BarChart3, ClipboardCheck, Cog, Gift, Lock, Megaphone, Monitor, ScrollText, ShieldAlert, ToggleRight, UserCog, Users, Wallet } from 'lucide-react'
 import { cn } from '@/components/ui/cn'
 import { env } from '@/services/env'
+import { isInsideTelegram } from '@/services/telegram'
 import { adminCall, useAdminSession } from './adminSession'
+import { desktopAdminUrl } from './browserMode'
 import { RafflesTab } from './raffles/RafflesTab'
 import { AdminsTab } from './tabs/AdminsTab'
 import { ApprovalsTab } from './tabs/ApprovalsTab'
+import { FeaturesTab } from './tabs/FeaturesTab'
 import { FinanceTab } from './tabs/FinanceTab'
 import { AuditTab, SecurityTab } from './tabs/LogTabs'
+import { MessagesTab } from './tabs/MessagesTab'
 import { OverviewTab } from './tabs/OverviewTab'
 import { PlayersTab } from './tabs/PlayersTab'
 import { SettingsTab } from './tabs/SettingsTab'
 import { AskDialog, Button, Err } from './ui'
+import { WebSignIn } from './WebSignIn'
 
-type Tab = 'overview' | 'raffles' | 'finance' | 'approvals' | 'players' | 'settings' | 'security' | 'audit' | 'admins'
+type Tab = 'overview' | 'raffles' | 'finance' | 'approvals' | 'players' | 'messages' | 'features' | 'settings' | 'security' | 'audit' | 'admins'
 const TABS: { id: Tab; label: string; icon: ReactNode; perm?: string }[] = [
   { id: 'overview', label: 'Overview', icon: <BarChart3 size={16} /> },
   { id: 'raffles', label: 'Raffles', icon: <Gift size={16} /> },
   { id: 'finance', label: 'Finance', icon: <Wallet size={16} />, perm: 'finance.read' },
   { id: 'approvals', label: 'Approvals', icon: <ClipboardCheck size={16} /> },
   { id: 'players', label: 'Players', icon: <Users size={16} /> },
+  { id: 'messages', label: 'Messages', icon: <Megaphone size={16} />, perm: 'messages.read' },
+  { id: 'features', label: 'Features', icon: <ToggleRight size={16} />, perm: 'features.read' },
   { id: 'settings', label: 'Settings', icon: <Cog size={16} /> },
   { id: 'security', label: 'Security', icon: <ShieldAlert size={16} /> },
   { id: 'audit', label: 'Audit', icon: <ScrollText size={16} /> },
@@ -49,6 +57,8 @@ function rememberedTab(): Tab {
 export function AdminScreen() {
   const navigate = useNavigate()
   const { token, me, error, expiresAt, idleMinutes, kept } = useAdminSession()
+  // A normal browser tab (desktop sign-in): no player app behind this screen
+  const [browser] = useState(() => !isInsideTelegram())
   const [tab, setTabState] = useState<Tab>(rememberedTab)
   const scroller = useRef<HTMLDivElement>(null)
   const scrollTop = useCallback(() => scroller.current?.scrollTo({ top: 0, behavior: 'smooth' }), [])
@@ -68,6 +78,7 @@ export function AdminScreen() {
   }, [tab])
 
   if (!token || !me) {
+    if (browser) return <WebSignIn reason={error} />
     return (
       <div className="fixed inset-0 z-40 flex items-center justify-center overflow-auto bg-neutral-50 p-4 font-body text-black">
         <div className="admin-in w-full max-w-sm rounded-2xl border border-black/15 bg-white p-6 text-center shadow-[0_20px_50px_-30px_rgba(0,0,0,0.5)]">
@@ -77,6 +88,9 @@ export function AdminScreen() {
           <h1 className="mt-4 text-[18px] font-extrabold">Admin is locked</h1>
           <p className="mt-2 text-[13.5px] leading-relaxed text-neutral-600">
             In the bot chat, send the admin command, then the master password, your username and your password. Use the Open admin button the bot sends back.
+          </p>
+          <p className="mt-3 text-[12.5px] leading-relaxed text-neutral-500">
+            On a computer, open <span className="select-all font-semibold text-black [overflow-wrap:anywhere]">{desktopAdminUrl()}</span> and sign in with the same details; the bot sends you a code.
           </p>
           <Err message={error} className="text-left" />
           <Button className="mt-5 w-full" onClick={() => navigate('/profile')}>
@@ -98,7 +112,8 @@ export function AdminScreen() {
       .catch((err: unknown) => console.warn('[admin] logout request failed; locking here anyway', err))
       .finally(() => {
         useAdminSession.getState().clear()
-        navigate('/profile')
+        // In a browser tab there is no player app: the sign-in form shows again
+        if (!browser) navigate('/profile')
       })
   }
 
@@ -121,6 +136,11 @@ export function AdminScreen() {
               <span className="rounded-full border border-black/20 px-2 py-px text-[11px] font-semibold text-neutral-700">
                 {me.name} · {me.role.replace('_', ' ')}
               </span>
+              {me.channel === 'browser' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-black px-2 py-px text-[11px] font-semibold text-white">
+                  <Monitor size={11} /> Browser session
+                </span>
+              )}
             </p>
             <p className="mt-0.5 text-[11.5px] leading-snug text-neutral-500">
               Signed in until {until}
@@ -182,6 +202,8 @@ export function AdminScreen() {
           {active === 'finance' && <FinanceTab can={me.permissions} />}
           {active === 'approvals' && <ApprovalsTab can={me.permissions} />}
           {active === 'players' && <PlayersTab can={me.permissions} superAdmin={superAdmin} />}
+          {active === 'messages' && <MessagesTab can={me.permissions} />}
+          {active === 'features' && <FeaturesTab can={me.permissions} />}
           {active === 'settings' && <SettingsTab can={me.permissions} superAdmin={superAdmin} />}
           {active === 'security' && <SecurityTab />}
           {active === 'audit' && <AuditTab />}

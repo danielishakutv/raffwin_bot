@@ -172,6 +172,7 @@ export function Field({
   children,
   className,
   aside,
+  group,
 }: {
   label: ReactNode
   hint?: ReactNode
@@ -179,9 +180,12 @@ export function Field({
   children: ReactNode
   className?: string
   aside?: ReactNode
+  /** Wraps a group of buttons (Segmented): a <label> would press the first one when its text is clicked */
+  group?: boolean
 }) {
+  const Tag = group ? 'div' : 'label'
   return (
-    <label className={cn('grid min-w-0 content-start gap-1', className)}>
+    <Tag role={group ? 'group' : undefined} className={cn('grid min-w-0 content-start gap-1', className)}>
       <span className="flex flex-wrap items-baseline justify-between gap-x-2 text-[12.5px] font-semibold text-neutral-800">
         {label}
         {aside && <span className="text-[11.5px] font-medium text-neutral-500">{aside}</span>}
@@ -192,7 +196,7 @@ export function Field({
       ) : hint ? (
         <span className="text-[11.5px] leading-snug text-neutral-500">{hint}</span>
       ) : null}
-    </label>
+    </Tag>
   )
 }
 
@@ -235,6 +239,55 @@ export function Segmented<T extends string>({
         })}
       </div>
     </div>
+  )
+}
+
+/** An on/off switch. `label` names it for screen readers when no visible text sits beside it. */
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  label,
+  busy,
+}: {
+  checked: boolean
+  onChange: (next: boolean) => void
+  disabled?: boolean
+  label: string
+  busy?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      disabled={disabled || busy}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        'relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-[background-color,border-color,opacity] duration-200 disabled:cursor-not-allowed disabled:opacity-40',
+        checked ? 'border-black bg-black' : 'border-black/30 bg-neutral-100',
+        busy && 'animate-pulse',
+      )}
+    >
+      <span
+        className={cn(
+          'absolute top-[3px] h-5 w-5 rounded-full shadow-[0_1px_2px_rgba(0,0,0,0.3)] transition-[left,background-color] duration-200',
+          checked ? 'left-[24px] bg-white' : 'left-[3px] bg-white ring-1 ring-black/20',
+        )}
+      />
+    </button>
+  )
+}
+
+/** A checkbox with its label beside it. */
+export function Check({ checked, onChange, children, disabled, className }: { checked: boolean; onChange: (v: boolean) => void; children: ReactNode; disabled?: boolean; className?: string }) {
+  return (
+    <label className={cn('inline-flex min-w-0 cursor-pointer select-none items-start gap-2 text-[13px] leading-snug', disabled && 'cursor-not-allowed opacity-50', className)}>
+      <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-black" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span className="min-w-0">{children}</span>
+    </label>
   )
 }
 

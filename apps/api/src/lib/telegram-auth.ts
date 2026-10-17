@@ -80,6 +80,8 @@ export interface InitDataUser {
   username?: string
   language_code?: string
   is_premium?: boolean
+  /** True when the player has allowed the bot to message them */
+  allows_write_to_pm?: boolean
 }
 
 export function readInitDataUser(fields: Map<string, string>): InitDataUser | null {

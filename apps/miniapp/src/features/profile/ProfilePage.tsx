@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Bell, ChevronRight, History, MapPin, Settings2, ShieldCheck, Ticket, Trophy, UserPlus, UserRound, Wrench } from 'lucide-react'
+import { Bell, BellRing, ChevronRight, History, MapPin, Settings2, ShieldCheck, Ticket, Trophy, UserPlus, UserRound, Wrench } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { startAdminSignIn, usingRealApi } from '@/api'
@@ -11,8 +11,9 @@ import { Toggle } from '@/components/ui/Field'
 import { formatPhoneDisplay } from '@/services/format'
 import { sound } from '@/services/sound'
 import { useAppStore, useMyWins } from '@/store/useAppStore'
+import { PhoneSheet } from '@/features/phone/PhoneShare'
 import { SectionCard } from './SectionCard'
-import { ContactSection, DemoControls, PersonalInfoSection } from './sections'
+import { BotMessagesSection, ContactSection, DemoControls, PersonalInfoSection } from './sections'
 import { cn } from '@/components/ui/cn'
 import { useAdminSession } from '@/features/admin/adminSession'
 
@@ -27,6 +28,7 @@ export function ProfilePage() {
   const setMuted = useAppStore((s) => s.setMuted)
   const setMusic = useAppStore((s) => s.setMusic)
   const [open, setOpen] = useState<string | null>(null)
+  const [phoneOpen, setPhoneOpen] = useState(false)
 
   // Signing out clears the profile: leave the app area.
   useEffect(() => {
@@ -60,7 +62,7 @@ export function ProfilePage() {
 
       <motion.div variants={popIn} className="flex flex-col gap-3">
         <SectionCard id="personal" icon={<UserRound size={20} />} title="Personal info" summary={`@${profile.username}${profile.phone ? ` · ${formatPhoneDisplay(profile.phone)}` : ''}`} open={open === 'personal'} onToggle={toggle}>
-          <PersonalInfoSection key={profile.username + profile.fullName} profile={profile} />
+          <PersonalInfoSection key={profile.username + profile.fullName} profile={profile} onPhone={() => setPhoneOpen(true)} />
         </SectionCard>
         <Link
           to="/kyc"
@@ -98,6 +100,15 @@ export function ProfilePage() {
 
       <motion.section variants={popIn} className="surface rounded-card p-4">
         <h2 className="flex items-center gap-2 text-[15px] font-bold">
+          <BellRing size={18} className="text-mist" /> Bot messages
+        </h2>
+        <div className="mt-2">
+          <BotMessagesSection profile={profile} />
+        </div>
+      </motion.section>
+
+      <motion.section variants={popIn} className="surface rounded-card p-4">
+        <h2 className="flex items-center gap-2 text-[15px] font-bold">
           <Settings2 size={18} className="text-mist" /> Sound
         </h2>
         <div className="mt-2 flex flex-col divide-y divide-white/8">
@@ -114,6 +125,8 @@ export function ProfilePage() {
         </motion.div>
       )}
 
+      {/* Outside the section cards, so the sheet is positioned against the screen */}
+      <PhoneSheet open={phoneOpen} onClose={() => setPhoneOpen(false)} />
     </motion.div>
   )
 }

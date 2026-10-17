@@ -8,6 +8,7 @@ import type { Entry, LiveSnapshot, Raffle, WinnerSlot } from '@raffwin/shared'
 import type { Db } from '../db/client'
 import { entries, rafflePrizes, raffles, users, type EntryRow, type RaffleRow } from '../db/schema'
 import { HttpError } from '../lib/http-error'
+import { featuresFor } from './features'
 
 const DRAWN_VISIBLE_DAYS = 30
 const ENTRANTS_SHOWN = 40
@@ -109,12 +110,16 @@ export async function getForPlayer(db: Db, raffleId: string): Promise<Raffle> {
 
 /**
  * The polled snapshot: one indexed query over the visible raffles plus the
- * player's balance. Kept deliberately small, because every open app asks for it
- * every few seconds.
+ * player's balance and feature switches (a feature turned off disappears from
+ * the app within seconds). Kept deliberately small, because every open app
+ * asks for it every few seconds.
  */
 export async function liveSnapshot(db: Db, user: { id: string; balanceCache: number }, now: number): Promise<LiveSnapshot> {
   const cutoff = new Date(now - DRAWN_VISIBLE_DAYS * 86_400_000)
-  const [me] = await db.select({ balance: users.balanceCache }).from(users).where(eq(users.id, user.id))
+  const [[me], features] = await Promise.all([
+    db.select({ balance: users.balanceCache }).from(users).where(eq(users.id, user.id)),
+    featuresFor(db, user.id),
+  ])
   const rows = await db
     .select({
       id: raffles.id,
@@ -131,6 +136,7 @@ export async function liveSnapshot(db: Db, user: { id: string; balanceCache: num
   return {
     serverTime: now,
     balance: me?.balance ?? user.balanceCache,
+    features,
     raffles: rows.map((r) => ({
       id: r.id,
       entriesCount: r.entriesCount,

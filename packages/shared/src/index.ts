@@ -4,6 +4,7 @@
  */
 export type * from './types'
 export * from './errors'
+export * from './features'
 export * from './phone'
 export * from './prizes'
 export * from './rate'

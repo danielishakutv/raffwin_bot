@@ -7,6 +7,7 @@ import { sessions, users, type UserRow } from '../db/schema'
 import { hashIp } from '../lib/crypto'
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
+import { ACTIVITY_REFRESH_MS, touchActivity } from '../services/engagement'
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace -- Express's own extension point
@@ -70,7 +71,23 @@ export function requireAuth(ctx: AppContext): RequestHandler {
       throw new HttpError('ACCOUNT_SUSPENDED', 'This account is suspended. Send /paysupport to the bot for help.')
     }
     req.auth = { user: row.user, sessionId: result.claims.sessionId }
+    await noteActivity(ctx, row.user)
     next()
+  }
+}
+
+/**
+ * Using the app counts as being here: after 5 quiet minutes, one UPDATE moves
+ * last_seen_at and the reminder schedule. It never fails the request; a
+ * failure only costs an early reminder, and the log says so.
+ */
+async function noteActivity(ctx: AppContext, user: UserRow): Promise<void> {
+  const seen = user.lastSeenAt?.getTime() ?? 0
+  if (ctx.now() - seen < ACTIVITY_REFRESH_MS) return
+  try {
+    await touchActivity(ctx, user.id)
+  } catch (error) {
+    ctx.log.error({ err: error, userId: user.id }, 'could not record activity; reminders may come early')
   }
 }
 

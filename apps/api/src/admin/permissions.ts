@@ -27,6 +27,14 @@ export const PERMISSIONS = [
   /** Finance report and expenses: super_admin and finance */
   'finance.read',
   'finance.write',
+  /** Feature switches: everyone reads them; only a super admin turns them on or off */
+  'features.read',
+  'features.manage',
+  /** Bot messages: the outbox and broadcast history; sending to players is super_admin only */
+  'messages.read',
+  'messages.send',
+  /** Reminder timing, come-back offer, streak rewards, transfer caps (super_admin) */
+  'engagement.write',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -39,6 +47,8 @@ const READ: Permission[] = [
   'approvals.read',
   'security.read',
   'audit.read',
+  'features.read',
+  'messages.read',
 ]
 
 const ROLE_PERMISSIONS: Record<AdminRole, ReadonlySet<Permission>> = {

@@ -3,6 +3,8 @@ import { RefreshCw } from 'lucide-react'
 import { fmt, naira, when, useLoad } from '../hooks'
 import { Badge, Button, Card, Err, KeyValues, Loading, Stat, TabHeading } from '../ui'
 
+const pct = (part: number, whole: number) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : '0%')
+
 export function OverviewTab() {
   const { data: o, error, reload, busy } = useLoad<AdminOverview>('/overview', 5_000)
   return (
@@ -26,6 +28,21 @@ export function OverviewTab() {
             <Stat label="Raised (all time)" value={naira(o.raised.naira)} sub={`${fmt(o.raised.raffs)} Raffs at ${naira(o.raised.nairaPerRaff)} each`} />
             <Stat label="Entries today" value={fmt(o.entries.today)} sub={`${fmt(o.entries.raffsToday)} Raffs`} />
             <Stat label="Raffles" value={`${o.raffles.open} live`} sub={`${o.raffles.drafts} draft${o.raffles.drafts === 1 ? '' : 's'}`} />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <Stat
+              label="Phones on file"
+              value={fmt(o.phones.withPhone)}
+              sub={`${pct(o.phones.withPhone, o.phones.withPhone + o.phones.withoutPhone)} of players · ${fmt(o.phones.withoutPhone)} still without`}
+            />
+            <Stat label="Without a phone" value={fmt(o.phones.withoutPhone)} sub="Cannot be called if they win. Message them from Messages." />
+            <Stat
+              label="Bot reach"
+              value={fmt(o.bot.reachable)}
+              sub={`${pct(o.bot.reachable, o.bot.reachable + o.bot.blocked)} reachable · ${fmt(o.bot.blocked)} blocked the bot`}
+            />
+            <Stat label="Bot messages" value={fmt(o.bot.sentLast24h)} sub={`sent in 24 h · ${fmt(o.bot.pending)} waiting to send`} />
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">

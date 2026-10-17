@@ -4,12 +4,23 @@ import type { AdminApproval, AdminUserDetail, AdminUserSummary } from '@raffwin/
 import { adminCall } from '../adminSession'
 import { fmt, useAction, useLoad, when } from '../hooks'
 import { askText } from '../ask'
-import { Badge, Button, Card, Empty, Err, KeyValues, Loading, Notice, TabHeading, TextInput } from '../ui'
+import { PhoneLink } from '../PhoneLink'
+import { Badge, Button, Card, Empty, Err, KeyValues, Loading, Notice, Segmented, TabHeading, TextInput } from '../ui'
+import { PlayerBotMessages, PlayerDelivery, PlayerEngagement, PlayerFeatures } from './PlayerCards'
+
+type Filter = '' | 'no_phone' | 'blocked' | 'inactive'
+const FILTERS: { value: Filter; label: string }[] = [
+  { value: '', label: 'All' },
+  { value: 'no_phone', label: 'No phone' },
+  { value: 'blocked', label: 'Blocked bot' },
+  { value: 'inactive', label: 'Inactive 2d+' },
+]
 
 export function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boolean }) {
   const [q, setQ] = useState('')
   const [query, setQuery] = useState('')
-  const { data, error, busy } = useLoad<AdminUserSummary[]>(`/users?q=${encodeURIComponent(query)}`, 15_000)
+  const [filter, setFilter] = useState<Filter>('')
+  const { data, error, busy } = useLoad<AdminUserSummary[]>(`/users?q=${encodeURIComponent(query)}${filter ? `&filter=${filter}` : ''}`, 15_000)
   const [selected, setSelected] = useState<string | null>(null)
 
   if (selected) return <PlayerDetail id={selected} can={can} superAdmin={superAdmin} onBack={() => setSelected(null)} />
@@ -17,6 +28,7 @@ export function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boo
   return (
     <>
       <TabHeading title="Players" sub="Search by username, name, phone or Telegram id." />
+      <Segmented<Filter> className="mb-3" size="sm" value={filter} onChange={setFilter} options={FILTERS} />
       <form
         className="mb-4 flex gap-2"
         onSubmit={(e) => {
@@ -36,16 +48,15 @@ export function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boo
       {!data ? (
         <Loading />
       ) : data.length === 0 ? (
-        <Empty title="No players found" />
+        <Empty title="No players found">{filter ? 'Nobody matches this filter and search.' : undefined}</Empty>
       ) : (
         <ul className="grid gap-2 lg:grid-cols-2">
           {data.map((u) => (
-            <li key={u.id} className="admin-in min-w-0">
-              <button
-                type="button"
-                onClick={() => setSelected(u.id)}
-                className="flex w-full min-w-0 items-center gap-3 rounded-xl border border-black/15 bg-white p-3.5 text-left transition-[box-shadow,border-color] duration-200 hover:border-black/40 hover:shadow-[0_6px_20px_-12px_rgba(0,0,0,0.35)]"
-              >
+            <li
+              key={u.id}
+              className="admin-in min-w-0 rounded-xl border border-black/15 bg-white transition-[box-shadow,border-color] duration-200 hover:border-black/40 hover:shadow-[0_6px_20px_-12px_rgba(0,0,0,0.35)]"
+            >
+              <button type="button" onClick={() => setSelected(u.id)} className="flex w-full min-w-0 items-center gap-3 p-3.5 pb-2 text-left">
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-[14px] font-bold uppercase">
                   {(u.username ?? u.fullName ?? '?').slice(0, 1)}
                 </span>
@@ -53,15 +64,20 @@ export function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boo
                   <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                     <span className="font-bold">@{u.username ?? '-'}</span>
                     {u.status !== 'active' && <Badge tone="solid">{u.status}</Badge>}
+                    {u.botBlocked && <Badge tone="dashed">blocked bot</Badge>}
                     <span className="ml-auto text-[12.5px] font-semibold">{fmt(u.balance)} Raffs</span>
                   </span>
                   <span className="block truncate text-[12.5px] text-neutral-600">{u.fullName ?? 'No name yet'}</span>
                   <span className="block truncate text-[11.5px] text-neutral-500">
-                    Telegram {u.telegramId} · {u.phone ?? 'no phone'} · seen {when(u.lastSeenAt)}
+                    Telegram {u.telegramId} · seen {when(u.lastSeenAt)}
                   </span>
                 </span>
                 <ChevronRight size={16} className="shrink-0 text-neutral-400" />
               </button>
+              {/* Outside the button: the number is a call link with its own copy button */}
+              <div className="px-3.5 pb-3 pl-[66px]">
+                <PhoneLink phone={u.phone} verified={u.phoneVerified} size="sm" />
+              </div>
             </li>
           ))}
         </ul>
@@ -153,13 +169,21 @@ function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string
               rows={[
                 ['Balance', `${fmt(d.user.balance)} Raffs`, 'strong'],
                 ['Ledger says', d.ledgerBalance !== d.user.balance ? <Badge tone="solid">{fmt(d.ledgerBalance)} · MISMATCH</Badge> : fmt(d.ledgerBalance)],
+                ['Phone', <PhoneLink key="phone" phone={d.user.phone} verified={d.user.phoneVerified} size="lg" className="justify-end" />, 'strong'],
                 ['Telegram id', String(d.user.telegramId)],
-                ['Phone', d.user.phone ?? 'none'],
+                ['Bot can message', d.user.botBlocked ? <Badge tone="solid">no · blocked the bot</Badge> : 'yes'],
                 ['Referred by', d.user.referredByUsername ? `@${d.user.referredByUsername}` : 'nobody'],
                 ['Referred', `${d.referrals.people} people, earned ${fmt(d.referrals.raffsEarned)} Raffs`],
               ]}
             />
           </Card>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <PlayerEngagement d={d} />
+            <PlayerDelivery d={d} />
+            <PlayerFeatures d={d} canManage={can.includes('features.manage')} onChanged={reload} />
+            <PlayerBotMessages d={d} />
+          </div>
 
           <div className="grid gap-4 xl:grid-cols-2">
             <Card title="Ledger" subtitle="Latest 100" bodyClassName="p-0">

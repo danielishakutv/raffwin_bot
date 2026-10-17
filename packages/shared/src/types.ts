@@ -4,6 +4,8 @@
  * does not care which backend it is talking to.
  */
 
+import type { FeatureMap } from './features'
+
 export type RaffleStatus = 'open' | 'closing_soon' | 'drawing' | 'drawn'
 
 export type PrizeKind = 'phone' | 'laptop' | 'tv' | 'earbuds' | 'powerbank' | 'voucher' | 'console'
@@ -72,6 +74,10 @@ export type TransactionType =
   | 'referral_reversal'
   /** A correction made by an admin, approved by a second admin */
   | 'adjustment'
+  /** Raffs another player sent you (feature raffs_transfer) */
+  | 'transfer_in'
+  /** Raffs you sent to another player */
+  | 'transfer_out'
 
 export interface Transaction {
   id: string
@@ -142,6 +148,8 @@ export interface ReferralEarning {
 export interface LiveSnapshot {
   serverTime: number
   balance: number
+  /** Effective feature switches for this player; a change shows or hides features within seconds */
+  features: FeatureMap
   raffles: {
     id: string
     entriesCount: number
@@ -213,6 +221,8 @@ export interface Profile {
   isAdmin: boolean
   contactPrefs: ContactPrefs
   verification: Verification
+  /** The bot may send reminders and offers to this player (they can turn it off) */
+  remindersOn: boolean
 }
 
 /** The KYC page: who to hand the prize to, and where. */
@@ -247,4 +257,59 @@ export interface Bootstrap {
   raffles: Raffle[]
   entries: Entry[]
   transactions: Transaction[]
+  /** Effective feature switches for this player (see features.ts) */
+  features: FeatureMap
+  /**
+   * Set once, on the open that claimed a come-back offer: the Raffs just
+   * credited, for a "welcome back" message. Null otherwise.
+   */
+  welcomeBack: { raffs: number } | null
+}
+
+/** GET /v1/streak (feature daily_streak). Days are Lagos calendar days. */
+export interface StreakState {
+  /** Consecutive days claimed, counting today if claimed; 0 when the streak is broken */
+  current: number
+  claimedToday: boolean
+  /** Raffs the next claim pays (today's if not yet claimed, else tomorrow's) */
+  nextReward: number
+  /** Reward by streak day: day 1 = rewards[0]; past the end the last value repeats */
+  rewards: number[]
+  /** YYYY-MM-DD (Lagos) of the last claim, or null */
+  lastClaimedDay: string | null
+  /** Best streak ever */
+  best: number
+}
+
+/** POST /v1/streak/claim */
+export interface StreakClaimResult {
+  state: StreakState
+  /** Raffs credited by this claim */
+  raffs: number
+  balance: number
+}
+
+/** GET /v1/transfers/recipient?username= : who you are about to send to */
+export interface TransferRecipient {
+  username: string
+  /** First name only, for "Send to Ada (@ada_obi)?" */
+  displayName: string
+}
+
+/** POST /v1/transfers (feature raffs_transfer) */
+export interface TransferResult {
+  id: string
+  toUsername: string
+  raffs: number
+  /** Sender's balance after the transfer */
+  balance: number
+  createdAt: string
+}
+
+/** GET /v1/transfers/limits */
+export interface TransferLimits {
+  minRaffs: number
+  dailyMaxRaffs: number
+  /** Raffs already sent today (Lagos day) */
+  sentToday: number
 }

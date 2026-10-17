@@ -15,14 +15,20 @@ import type {
   Raffle,
   KycInput,
   LiveSnapshot,
+  StreakClaimResult,
+  StreakState,
   Transaction,
+  TransferLimits,
+  TransferRecipient,
+  TransferResult,
 } from '@/data/types'
+import type { FeatureMap } from '@raffwin/shared'
 import type { RateQuote } from '@/services/rates'
 import { ApiError } from './errors'
-import type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse } from './mock'
+import type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse, SendRaffsRequest } from './mock'
 import { call, clearSession } from './session'
 
-export type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse }
+export type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse, SendRaffsRequest }
 
 function notYet(what: string): never {
   throw new ApiError('NOT_READY', `${what} is not switched on yet. It arrives with the next release.`)
@@ -82,12 +88,27 @@ export function updateContactPrefs(prefs: ContactPrefs): Promise<Profile> {
   return call('PUT', '/v1/profile/contact-prefs', prefs)
 }
 
+/** The phone alone, from Telegram's signed contact share (the sign-up step, or later). */
+export function savePhone(contactProof: string): Promise<Profile> {
+  return call<Profile>('PUT', '/v1/phone', { contactProof })
+}
+
+/** Whether the bot may send this player reminders and come-back offers. */
+export function setReminders(on: boolean): Promise<Profile> {
+  return call<Profile>('PUT', '/v1/profile/reminders', { on })
+}
+
 export async function submitVerification(): Promise<Profile> {
   return notYet('Identity verification')
 }
 
 export async function setVerificationStatus(): Promise<Profile> {
   return notYet('The verification demo switch')
+}
+
+/** Demo-only switch; in the real app a super admin switches features in the admin. */
+export async function setDemoFeature(): Promise<FeatureMap> {
+  return notYet('The feature demo switch')
 }
 
 /* Rates ---------------------------------------------------------------------- */
@@ -136,6 +157,31 @@ export function getTransactions(): Promise<Transaction[]> {
 
 export function getEntries(): Promise<Entry[]> {
   return call<Entry[]>('GET', '/v1/entries')
+}
+
+/* Daily streak (feature daily_streak) ------------------------------------------ */
+
+export function getStreak(): Promise<StreakState> {
+  return call<StreakState>('GET', '/v1/streak')
+}
+
+export function claimStreak(): Promise<StreakClaimResult> {
+  return call<StreakClaimResult>('POST', '/v1/streak/claim')
+}
+
+/* Send Raffs (feature raffs_transfer) ------------------------------------------ */
+
+export function getTransferLimits(): Promise<TransferLimits> {
+  return call<TransferLimits>('GET', '/v1/transfers/limits')
+}
+
+export function findRecipient(username: string): Promise<TransferRecipient> {
+  const u = username.trim().replace(/^@/, '').toLowerCase()
+  return call<TransferRecipient>('GET', `/v1/transfers/recipient?username=${encodeURIComponent(u)}`)
+}
+
+export function sendRaffs(req: SendRaffsRequest): Promise<TransferResult> {
+  return call<TransferResult>('POST', '/v1/transfers', req)
 }
 
 /* Referrals ------------------------------------------------------------------ */

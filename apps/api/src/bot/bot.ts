@@ -12,7 +12,9 @@ import { eq } from 'drizzle-orm'
 import { parseStartParam } from '@raffwin/shared'
 import type { AppContext } from '../context'
 import { referralHints, users } from '../db/schema'
+import { escapeHtml } from '../lib/html'
 import { installAdminLogin } from './admin-login'
+import { askForPhone, botStarted, installEngagement, isPhoneStart } from './engagement-bot'
 
 export interface BotOptions {
   token: string
@@ -43,10 +45,6 @@ async function rememberInvite(app: AppContext, telegramId: number, payload: stri
   }
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
 export function createBot(opts: BotOptions): Bot {
   const bot = new Bot(opts.token, opts.testing ? { botInfo: opts.testing.botInfo } : {})
   if (opts.testing) bot.api.config.use(opts.testing.transformer)
@@ -54,7 +52,13 @@ export function createBot(opts: BotOptions): Bot {
   const envNote = opts.envLabel === 'production' ? '' : `\n\n<i>Test environment: no real money.</i>`
 
   bot.command('start', async (ctx) => {
-    if (opts.app && ctx.from) await rememberInvite(opts.app, ctx.from.id, ctx.match)
+    if (opts.app && ctx.from) {
+      await rememberInvite(opts.app, ctx.from.id, ctx.match)
+      // Pressing Start again after blocking the bot makes the player reachable again
+      await botStarted(opts.app, ctx.from.id)
+      // https://t.me/<bot>?start=phone: the app sends players here when it cannot ask for the number itself
+      if (isPhoneStart(ctx.match)) return askForPhone(ctx, opts.app, opts.appUrl)
+    }
     const name = ctx.from?.first_name ? escapeHtml(ctx.from.first_name) : 'there'
     await ctx.reply(
       [
@@ -76,6 +80,7 @@ export function createBot(opts: BotOptions): Bot {
         '',
         '/start - open the app',
         '/rules - how draws work',
+        '/phone - share your phone number',
         '/paysupport - help with a payment',
         '/help - this message',
         envNote,
@@ -107,7 +112,10 @@ export function createBot(opts: BotOptions): Bot {
     )
   })
 
-  if (opts.app) installAdminLogin(bot, opts.app, opts.appUrl)
+  if (opts.app) {
+    installAdminLogin(bot, opts.app, opts.appUrl)
+    installEngagement(bot, opts.app, opts.appUrl)
+  }
 
   bot.on('message', async (ctx) => {
     await ctx.reply('Open Raffle Win to enter raffles, or send /help for the commands.', { reply_markup: openButton() })
@@ -128,6 +136,7 @@ export async function configureBot(
   await bot.api.setMyCommands([
     { command: 'start', description: 'Open Raffle Win' },
     { command: 'rules', description: 'How the draws work' },
+    { command: 'phone', description: 'Share your phone number' },
     { command: 'paysupport', description: 'Help with a payment' },
     { command: 'help', description: 'Commands' },
   ])

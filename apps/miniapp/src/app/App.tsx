@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { HashRouter, useNavigate } from 'react-router-dom'
 import { resumeStored, unlockFromUrl } from '@/features/admin/adminSession'
+import { useBrowserAdminRoute } from '@/features/admin/browserMode'
 import { AppRoutes } from './router'
 import { TelegramGate } from './TelegramGate'
 import { Orbs } from '@/components/ui/Orbs'
@@ -28,6 +29,9 @@ function AdminTicket() {
   return null
 }
 
+// Desktop admin (#/admin in a normal browser): its own sign-in, no player boot, no gate
+const BrowserAdmin = lazy(() => import('@/features/admin/BrowserAdmin').then((m) => ({ default: m.BrowserAdmin })))
+
 /** Mounted inside the gate so the rate loop only runs for real sessions. */
 function RateLifecycle() {
   useRateLifecycle()
@@ -45,6 +49,7 @@ function RateLifecycle() {
  */
 export function App() {
   const [gated] = useState(() => !isInsideTelegram() && !env.allowBrowser)
+  const browserAdmin = useBrowserAdminRoute()
   const boot = useAppStore((s) => s.boot)
 
   useEffect(() => {
@@ -53,9 +58,16 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (!gated) void boot()
-  }, [gated, boot])
+    if (!gated && !browserAdmin) void boot()
+  }, [gated, browserAdmin, boot])
 
+  if (browserAdmin) {
+    return (
+      <Suspense fallback={<div className="fixed inset-0 z-40 bg-neutral-50" aria-label="Loading the admin" />}>
+        <BrowserAdmin />
+      </Suspense>
+    )
+  }
   if (gated) return <TelegramGate />
 
   return (

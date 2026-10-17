@@ -47,6 +47,13 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   /** Git commit, set by the deploy script; reported by /health. */
   GIT_COMMIT: z.string().default('unknown'),
+  /**
+   * on (default): this process runs the background workers - the bot's outbox
+   * sender and the scheduler (broadcast fan-out, reminders, come-back offers).
+   * Several processes may all say on: a Postgres advisory lock lets only one
+   * work at a time. off: HTTP only (one-off scripts, a read-only replica).
+   */
+  WORKERS: z.enum(['on', 'off']).default('on'),
 
   /**
    * The Mini App's own address, e.g. https://test.example.com/ - the

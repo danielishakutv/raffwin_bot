@@ -80,6 +80,28 @@ export const cursorQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
 })
 
+/** PUT /v1/phone: the phone alone, from Telegram's signed contact share (sign-up step, or later) */
+export const phoneBody = z.object({
+  contactProof: z.string().min(1).max(4096),
+})
+
+/** PUT /v1/profile/reminders: whether the bot may send this player reminders and offers */
+export const remindersBody = z.object({ on: z.boolean() })
+
+/** GET /v1/transfers/recipient */
+export const recipientQuery = z.object({ username: z.string().trim().min(1).max(41) })
+
+/** POST /v1/transfers (feature raffs_transfer) */
+export const transferBody = z.object({
+  /** Recipient's Raffle Win username, with or without @ */
+  to: z.string().trim().min(1).max(41),
+  raffs: z.number().int().min(1).max(1_000_000),
+  /** One per confirmation tap: a retry with the same key returns the same transfer */
+  idempotencyKey: z.string().uuid(),
+  note: z.string().trim().max(120).optional(),
+})
+
 export type KycBody = z.infer<typeof kycBody>
+export type TransferBody = z.infer<typeof transferBody>
 export type EnterRaffleBody = z.infer<typeof enterRaffleBody>
 export type ProfilePatchBody = z.infer<typeof profilePatchBody>

@@ -6,8 +6,12 @@ import express, { Router, type Request } from 'express'
 import { z } from 'zod'
 import {
   adjustmentBody,
+  broadcastBody,
   decisionBody,
+  engagementBody,
   expenseBody,
+  featureOverrideBody,
+  featureToggleBody,
   limitsBody,
   MEDIA_MAX_BYTES,
   MEDIA_TYPES,
@@ -20,7 +24,7 @@ import { cursorQuery } from '@raffwin/shared/schemas'
 import type { AdminMe } from '@raffwin/shared/admin-types'
 import type { AppContext } from '../context'
 import { eq } from 'drizzle-orm'
-import { raffles, users } from '../db/schema'
+import { NOTIFICATION_KINDS, raffles, users } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { requestMeta } from '../http/middleware'
 import { getSetting } from '../services/settings'
@@ -28,7 +32,10 @@ import { decide, executeDirect, listApprovals, requestApproval } from './approva
 import { verifyChain } from './audit'
 import * as ops from './operations'
 import { permissionsOf } from './permissions'
-import { adminOf, auditEveryRequest, exchangeTicket, idleMinutesFor, logout, requireAdmin, requirePermission, resumeSession } from './session'
+import { adminOf, auditEveryRequest, exchangeTicket, idleMinutesFor, logout, requireAdmin, requirePermission, resumeSession, type AdminChannel } from './session'
+import { startWebLogin, verifyWebLogin } from './web-login'
+import * as features from './features-admin'
+import * as messages from './messages'
 import * as admins from './admins'
 import * as finance from './finance'
 import { fetchRemoteImage, storeUpload } from '../services/media'
@@ -42,12 +49,13 @@ function idParam(req: Request): string {
   return parsed.data
 }
 
-function toMe(user: ReturnType<typeof adminOf>['user']): AdminMe {
-  return { id: user.id, name: user.name, telegramId: user.telegramId, role: user.role, permissions: permissionsOf(user.role) }
+function toMe(user: ReturnType<typeof adminOf>['user'], channel: AdminChannel): AdminMe {
+  return { id: user.id, name: user.name, telegramId: user.telegramId, role: user.role, permissions: permissionsOf(user.role), channel }
 }
 
 function me(req: Request): AdminMe {
-  return toMe(adminOf(req).user)
+  const { user, channel } = adminOf(req)
+  return toMe(user, channel)
 }
 
 export function adminRoutes(ctx: AppContext): Router {
@@ -76,7 +84,15 @@ export function adminRoutes(ctx: AppContext): Router {
   // One-time ticket from the bot's admin sign-in + this Mini App's initData -> bearer token
   r.post('/auth/ticket', async (req, res) => {
     const { admin, token, expiresAt } = await exchangeTicket(ctx, req)
-    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin.role), admin: toMe(admin) })
+    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin.role), admin: toMe(admin, 'telegram') })
+  })
+  // Browser (desktop) sign-in: the same secrets, then a code the bot sends to the admin's bound Telegram
+  r.post('/auth/web/start', async (req, res) => {
+    res.json(await startWebLogin(ctx, req))
+  })
+  r.post('/auth/web/verify', async (req, res) => {
+    const { admin, token, expiresAt } = await verifyWebLogin(ctx, req)
+    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin.role), admin: toMe(admin, 'browser') })
   })
   // Reopened Mini App with a stored token: fresh initData from the bound account carries the session on
   r.post('/auth/resume', authed, async (req, res) => {
@@ -159,7 +175,8 @@ export function adminRoutes(ctx: AppContext): Router {
 
   r.get('/users', authed, perm('users.read'), async (req, res) => {
     const q = z.string().max(100).default('').parse(req.query.q ?? '')
-    res.json(await ops.searchUsers(ctx, q))
+    const filter = z.enum(ops.USER_FILTERS).optional().parse(req.query.filter || undefined)
+    res.json(await ops.searchUsers(ctx, q, filter))
   })
   r.get('/users/:id', authed, perm('users.read'), async (req, res) => {
     res.json(await ops.userDetail(ctx, idParam(req)))
@@ -196,6 +213,52 @@ export function adminRoutes(ctx: AppContext): Router {
     const body = rateBaseBody.parse(req.body)
     const previousMicro = await getSetting(ctx.db, 'rate.base_stars_per_raff_micro')
     await askOrRun(req, res, 'rate_base_change', { starsPerRaffMicro: Math.round(body.starsPerRaff * 1e6), previousMicro }, body.reason)
+  })
+
+  /* Features --------------------------------------------------------------- */
+
+  r.get('/features', authed, perm('features.read'), async (_req, res) => {
+    res.json(await features.listFeatures(ctx))
+  })
+  r.put('/features/:key', authed, perm('features.manage'), async (req, res) => {
+    res.json(await features.toggleFeature(ctx, adminId(req), features.featureKeyParam(req.params.key), featureToggleBody.parse(req.body)))
+  })
+  r.get('/features/:key/overrides', authed, perm('features.read'), async (req, res) => {
+    res.json(await features.listOverrides(ctx, features.featureKeyParam(req.params.key)))
+  })
+  r.post('/features/:key/overrides', authed, perm('features.manage'), async (req, res) => {
+    const key = features.featureKeyParam(req.params.key)
+    res.status(201).json(await features.addOverride(ctx, adminId(req), key, featureOverrideBody.parse(req.body)))
+  })
+  r.post('/features/overrides/:id/clear', authed, perm('features.manage'), async (req, res) => {
+    const { reason } = reasonBody.parse(req.body)
+    await features.removeOverride(ctx, adminId(req), idParam(req), reason)
+    res.status(204).end()
+  })
+
+  /* Messages ---------------------------------------------------------------- */
+
+  r.post('/broadcasts', authed, perm('messages.send'), async (req, res) => {
+    res.status(201).json(await messages.createAdminBroadcast(ctx, adminOf(req).user, broadcastBody.parse(req.body)))
+  })
+  r.get('/broadcasts', authed, perm('messages.read'), async (_req, res) => {
+    res.json(await messages.listBroadcasts(ctx))
+  })
+  r.post('/broadcasts/:id/cancel', authed, perm('messages.send'), async (req, res) => {
+    res.json(await messages.cancelBroadcast(ctx, adminId(req), idParam(req)))
+  })
+  r.get('/notifications', authed, perm('messages.read'), async (req, res) => {
+    const base = cursorQuery.parse(req.query)
+    const kind = z.enum(NOTIFICATION_KINDS).optional().parse(req.query.kind || undefined)
+    const status = z.enum(messages.NOTIFICATION_STATUSES).optional().parse(req.query.status || undefined)
+    const userId = uuid.optional().parse(req.query.userId || undefined)
+    res.json(await messages.listNotifications(ctx, { ...base, kind, status, userId }))
+  })
+  r.get('/engagement', authed, perm('messages.read'), async (_req, res) => {
+    res.json(await messages.getEngagement(ctx))
+  })
+  r.put('/engagement', authed, perm('engagement.write'), async (req, res) => {
+    res.json(await messages.putEngagement(ctx, adminId(req), engagementBody.parse(req.body)))
   })
 
   /* Approvals -------------------------------------------------------------- */

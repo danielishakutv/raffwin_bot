@@ -10,6 +10,8 @@ import { cn } from '@/components/ui/cn'
 import { LogoMark } from '@/components/ui/Logo'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { toast } from '@/components/ui/toastStore'
+import { PhoneShareBody, PhoneSharePrimary } from '@/features/phone/PhoneShare'
+import { usePhoneShare, type PhoneShare } from '@/features/phone/usePhoneShare'
 import { haptics } from '@/services/haptics'
 import { sound } from '@/services/sound'
 import { useAppStore } from '@/store/useAppStore'
@@ -21,7 +23,12 @@ const slideVariants = {
   exit: (dir: number) => ({ x: dir > 0 ? -80 : 80, opacity: 0, transition: { duration: 0.18 } }),
 }
 
-/** One-time welcome: hero, how it works, rules with an agree gate. Swipe or tap. */
+/**
+ * One-time welcome: hero, how it works, rules with an agree gate, then the
+ * phone number (the closest thing to a sign-up: the account already exists).
+ * The phone comes last, once the player knows what Raffle Win is and why a
+ * number matters. Swipe or tap.
+ */
 export function OnboardingPage() {
   const navigate = useNavigate()
   const profile = useAppStore((s) => s.profile)
@@ -29,11 +36,18 @@ export function OnboardingPage() {
   const [step, setStep] = useState(0)
   const [agreed, setAgreed] = useState(false)
   const [saving, setSaving] = useState(false)
+  // Decided once: saving the number mid-flow must not make the step vanish under the player
+  const [askPhone] = useState(() => !profile?.phone)
+  const phone = usePhoneShare()
   const dir = useRef(1)
-  const last = 2
+  const rulesStep = 2
+  const phoneStep = 3
+  const last = askPhone ? phoneStep : rulesStep
 
   const go = (delta: number) => {
-    const next = Math.max(0, Math.min(last, step + delta))
+    // Nothing past the rules until agree() has saved the agreement (read fresh: agree() calls go right after)
+    const ceiling = useAppStore.getState().onboardingComplete ? last : rulesStep
+    const next = Math.max(0, Math.min(ceiling, step + delta))
     if (next === step) return
     dir.current = delta
     sound.play('whoosh')
@@ -41,14 +55,16 @@ export function OnboardingPage() {
     setStep(next)
   }
 
-  const finish = async () => {
+  /** Agreeing to the rules finishes onboarding; the phone step after it can be left for later. */
+  const agree = async () => {
     if (!agreed) return
     setSaving(true)
     try {
       await completeOnboarding()
       sound.play('chime')
       haptics.notify('success')
-      navigate('/home', { replace: true })
+      if (askPhone) go(1)
+      else navigate('/home', { replace: true })
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -56,11 +72,13 @@ export function OnboardingPage() {
     }
   }
 
+  const home = () => navigate('/home', { replace: true })
+
   return (
     <div className="relative mx-auto flex min-h-dvh w-full max-w-[520px] flex-col px-5 safe-top">
       <div className="flex items-center justify-between pt-5">
         <div className="flex items-center gap-2">
-          {[0, 1, 2].map((i) => (
+          {Array.from({ length: last + 1 }, (_, i) => i).map((i) => (
             <motion.span
               key={i}
               animate={{ width: i === step ? 28 : 8, opacity: i <= step ? 1 : 0.4 }}
@@ -69,7 +87,9 @@ export function OnboardingPage() {
             />
           ))}
         </div>
-        <span className="text-[13px] font-semibold text-mist">Step {step + 1} of 3</span>
+        <span className="text-[13px] font-semibold text-mist">
+          Step {step + 1} of {last + 1}
+        </span>
       </div>
 
       <div className="relative flex flex-1 flex-col overflow-hidden">
@@ -92,28 +112,59 @@ export function OnboardingPage() {
           >
             {step === 0 && <WelcomeSlide name={profile?.fullName.split(' ')[0] ?? 'there'} />}
             {step === 1 && <HowItWorksSlide />}
-            {step === 2 && <RulesSlide agreed={agreed} onAgree={setAgreed} />}
+            {step === rulesStep && <RulesSlide agreed={agreed} onAgree={setAgreed} />}
+            {step === phoneStep && <PhoneSlide share={phone} />}
           </motion.div>
         </AnimatePresence>
       </div>
 
-      <div className="flex items-center gap-3 pb-6 pt-4 safe-bottom">
-        {step > 0 && (
-          <BouncyButton variant="secondary" size="lg" sfx="click" onClick={() => go(-1)}>
-            Back
-          </BouncyButton>
-        )}
-        {step < last ? (
-          <BouncyButton size="lg" block onClick={() => go(1)}>
-            {step === 0 ? 'Show me how it works' : 'Read the rules'}
-          </BouncyButton>
-        ) : (
-          <BouncyButton size="lg" block pulse={agreed} disabled={!agreed} loading={saving} onClick={() => void finish()}>
-            Agree and continue
-          </BouncyButton>
-        )}
+      <div className="flex flex-col gap-2 pb-6 pt-4 safe-bottom">
+        <div className="flex items-center gap-3">
+          {step > 0 && phone.status !== 'saved' && (
+            <BouncyButton variant="secondary" size="lg" sfx="click" onClick={() => go(-1)}>
+              Back
+            </BouncyButton>
+          )}
+          {step < rulesStep ? (
+            <BouncyButton size="lg" block onClick={() => go(1)}>
+              {step === 0 ? 'Show me how it works' : 'Read the rules'}
+            </BouncyButton>
+          ) : step === rulesStep ? (
+            <BouncyButton size="lg" block pulse={agreed} disabled={!agreed} loading={saving} onClick={() => void agree()}>
+              Agree and continue
+            </BouncyButton>
+          ) : (
+            <PhoneSharePrimary share={phone} savedLabel="Start playing" onSavedClick={home} />
+          )}
+        </div>
+        {step === phoneStep && phone.status !== 'saved' && <LaterLink onLater={home} />}
       </div>
     </div>
+  )
+}
+
+/**
+ * "Later" is allowed but asks twice: the first tap says plainly what skipping
+ * means (no way to reach a winner; entering a raffle asks again).
+ */
+function LaterLink({ onLater }: { onLater: () => void }) {
+  const [asked, setAsked] = useState(false)
+  if (!asked) {
+    return (
+      <button type="button" onClick={() => setAsked(true)} className="tap self-center px-3 text-[13px] font-semibold text-haze">
+        Later
+      </button>
+    )
+  }
+  return (
+    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center gap-1 text-center">
+      <p className="max-w-[36ch] text-[12px] text-mist">
+        Without a number we cannot reach you if you win, and entering a raffle will ask for it first.
+      </p>
+      <button type="button" onClick={onLater} className="tap px-3 text-[13px] font-semibold text-haze underline underline-offset-4">
+        Skip for now
+      </button>
+    </motion.div>
   )
 }
 
@@ -226,6 +277,22 @@ function HowItWorksSlide() {
           </motion.li>
         ))}
       </motion.ol>
+    </div>
+  )
+}
+
+function PhoneSlide({ share }: { share: PhoneShare }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pb-2">
+      {share.status !== 'saved' && (
+        <>
+          <h1 className="text-[30px] font-bold leading-tight">Add your phone number</h1>
+          <p className="mt-2 text-[15px] text-mist">So we can reach you the day you win.</p>
+        </>
+      )}
+      <div className="mt-5">
+        <PhoneShareBody share={share} />
+      </div>
     </div>
   )
 }

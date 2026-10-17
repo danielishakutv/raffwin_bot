@@ -1,4 +1,5 @@
 /** Shapes the admin API returns, shared with the admin dashboard. */
+import type { FeatureKey } from './features'
 
 export type AdminRole = 'super_admin' | 'raffle_manager' | 'finance' | 'support' | 'viewer'
 
@@ -8,6 +9,16 @@ export interface AdminMe {
   telegramId: number | null
   role: AdminRole
   permissions: string[]
+  /** How this session signed in: the bot's Open admin button, or the browser sign-in with a code from the bot */
+  channel: 'telegram' | 'browser'
+}
+
+/** POST /admin/v1/auth/web/start: secrets accepted, a 6-digit code went to the admin's bound Telegram */
+export interface AdminWebLoginChallenge {
+  challengeId: string
+  expiresAt: number
+  /** Where the code went, masked, e.g. "@tok***" */
+  sentTo: string
 }
 
 /** POST /admin/v1/auth/telegram */
@@ -27,6 +38,8 @@ export interface AdminPrize {
   raffsValue: number
   costNaira: number
   winnerUsername: string | null
+  /** The winner's verified phone, to arrange delivery (null until drawn, or if they have none) */
+  winnerPhone?: string | null
   winnerTicket: number | null
 }
 
@@ -69,6 +82,10 @@ export interface AdminUserSummary {
   signedUpAt: string | null
   lastSeenAt: string | null
   referredByUsername: string | null
+  /** True when the phone came from Telegram's signed contact share (app or bot chat) */
+  phoneVerified: boolean
+  /** The player blocked the bot (or deleted their account): bot messages cannot reach them */
+  botBlocked: boolean
 }
 
 export interface AdminLedgerRow {
@@ -89,6 +106,132 @@ export interface AdminUserDetail {
   entries: { id: string; raffleName: string; qty: number; raffsSpent: number; ticketFrom: number; ticketTo: number; createdAt: string }[]
   sessions: { id: string; createdAt: string; expiresAt: string; revokedAt: string | null; revokedReason: string | null }[]
   referrals: { people: number; raffsEarned: number }
+  /** Reminders, offers and the streak */
+  engagement: {
+    remindersOn: boolean
+    nextReminderAt: string | null
+    remindersSinceLastOpen: number
+    lastReminderAt: string | null
+    botBlockedAt: string | null
+    streak: { current: number; best: number; lastClaimedDay: string | null }
+    comebackOffers: { offeredAt: string; expiresAt: string; claimedAt: string | null; raffs: number }[]
+  }
+  /** Every feature as it applies to this player */
+  features: AdminUserFeature[]
+  /** Latest bot messages to this player */
+  notifications: AdminNotification[]
+  /** Delivery details from KYC, for reaching a winner */
+  delivery: { state: string; city: string; motorPark: string } | null
+}
+
+export interface AdminUserFeature {
+  key: FeatureKey
+  name: string
+  /** The switch for everyone */
+  global: boolean
+  /** This player's own override, or null */
+  override: boolean | null
+  /** The live override's id (to clear it), or null when there is none */
+  overrideId: string | null
+  /** What applies: override ?? global */
+  effective: boolean
+}
+
+export interface AdminFeature {
+  key: FeatureKey
+  name: string
+  description: string
+  audience: 'player' | 'automation'
+  /** The switch for everyone */
+  enabled: boolean
+  defaultEnabled: boolean
+  /** Suggested announcement when turning it on for everyone, or null */
+  announce: string | null
+  /** Live per-player overrides */
+  overrides: { on: number; off: number }
+  updatedAt: string | null
+  updatedBy: string | null
+}
+
+export interface AdminFeatureOverride {
+  id: string
+  userId: string
+  username: string | null
+  telegramId: number
+  enabled: boolean
+  note: string
+  createdAt: string
+  createdBy: string | null
+}
+
+export type NotificationKind =
+  | 'reminder'
+  | 'comeback'
+  | 'announcement'
+  | 'feature'
+  | 'raffle_new'
+  | 'raffle_cancelled'
+  | 'transfer'
+  | 'system'
+
+export interface AdminNotification {
+  id: string
+  kind: NotificationKind
+  /** Which reminder text (r01..r16) or template, when there is one */
+  templateKey: string | null
+  username: string | null
+  text: string
+  status: 'pending' | 'sending' | 'sent' | 'failed' | 'skipped'
+  attempts: number
+  error: string | null
+  notBefore: string
+  sentAt: string | null
+  createdAt: string
+}
+
+export interface AdminBroadcast {
+  id: string
+  kind: 'announcement' | 'feature' | 'raffle_new' | 'raffle_cancelled'
+  title: string
+  text: string
+  openButton: boolean
+  /** Human-readable audience, e.g. "Everyone" or "Inactive 3+ days" */
+  audienceLabel: string
+  status: 'fanning_out' | 'sending' | 'done' | 'cancelled'
+  /** Players queued so far */
+  total: number
+  sent: number
+  /** Telegram refused or errored after retries */
+  failed: number
+  /** Not attempted: stopped by an admin, the player blocked the bot, or was suspended */
+  skipped: number
+  pending: number
+  createdBy: string | null
+  createdAt: string
+  finishedAt: string | null
+}
+
+/** One of the rotating reminder texts, for the admin to read */
+export interface AdminReminderText {
+  key: string
+  text: string
+}
+
+export interface AdminEngagement {
+  reminderMinHours: number
+  reminderMaxHours: number
+  maxRemindersPerSpell: number
+  quietStartHour: number
+  quietEndHour: number
+  comebackAfterHours: number
+  comebackRaffs: number
+  comebackCooldownDays: number
+  streakRewards: number[]
+  transferMinRaffs: number
+  transferDailyMaxRaffs: number
+  reminderTexts: AdminReminderText[]
+  /** Outbox health */
+  outbox: { pending: number; sentLast24h: number; failedLast24h: number; blockedPlayers: number }
 }
 
 export interface AdminApproval {
@@ -145,6 +288,10 @@ export interface AdminOverview {
   pendingApprovals: number
   securityLast24h: Record<'low' | 'medium' | 'high' | 'critical', number>
   rate: { starsPerRaff: number; baseStarsPerRaff: number; movePct: number; expiresAt: string }
+  /** Players with a phone on file (verified through Telegram) and without */
+  phones: { withPhone: number; withoutPhone: number }
+  /** Bot reach: players who blocked the bot can get no messages */
+  bot: { reachable: number; blocked: number; sentLast24h: number; pending: number }
 }
 
 export interface AdminExpense {

@@ -22,6 +22,10 @@ const STATUS: Record<ApiErrorCode, number> = {
   INVALID_INPUT: 400,
   RATE_LIMITED: 429,
   SERVER_ERROR: 500,
+  FEATURE_OFF: 403,
+  PHONE_REQUIRED: 422,
+  ALREADY_CLAIMED: 409,
+  LIMIT_REACHED: 409,
 }
 
 /** An error the client is meant to see: code, user-facing message, HTTP status. */

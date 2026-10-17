@@ -75,6 +75,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Express {
 
   app.use('/admin/v1', limiter(ctx, limits.global, 'admin'))
   app.use('/admin/v1/auth/ticket', limiter(ctx, limits.auth, 'admin_login'))
+  app.use('/admin/v1/auth/web', limiter(ctx, limits.auth, 'admin_web_login'))
   app.use('/admin/v1', adminRoutes(ctx))
 
   app.use(notFound)

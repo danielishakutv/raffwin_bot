@@ -12,6 +12,7 @@ import {
   bigint,
   customType,
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -70,11 +71,24 @@ export const users = pgTable(
     kycCompletedAt: timestamp('kyc_completed_at', { withTimezone: true }),
     onboardingCompletedAt: timestamp('onboarding_completed_at', { withTimezone: true }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+
+    /* Bot messages (reminders, offers, announcements) ----------------------- */
+    /** Telegram refused a message because the player blocked the bot (or left); cleared when they start it again */
+    botBlockedAt: timestamp('bot_blocked_at', { withTimezone: true }),
+    /** The player turned reminders and offers off (app, or the button under a reminder) */
+    remindersOptOutAt: timestamp('reminders_opt_out_at', { withTimezone: true }),
+    /** When the next inactivity reminder is due: last open + 6..10 h (random), reset on every open */
+    nextReminderAt: timestamp('next_reminder_at', { withTimezone: true }),
+    /** Reminders sent since the player last opened the app */
+    remindersSinceOpen: integer('reminders_since_open').notNull().default(0),
+    lastReminderAt: timestamp('last_reminder_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     uniqueIndex('users_telegram_id_key').on(t.telegramId),
+    index('users_next_reminder_idx').on(t.nextReminderAt).where(sql`${t.nextReminderAt} is not null`),
+    index('users_last_seen_idx').on(t.lastSeenAt),
     uniqueIndex('users_username_key').on(t.username).where(sql`${t.username} is not null`),
     // One verified phone, one account (section 5)
     uniqueIndex('users_phone_key').on(t.phone).where(sql`${t.phone} is not null`),
@@ -336,6 +350,10 @@ export const LEDGER_TYPES = [
   'referral',
   'referral_reversal',
   'adjustment',
+  /** Raffs received from another player (raffs_transfers) */
+  'transfer_in',
+  /** Raffs sent to another player */
+  'transfer_out',
 ] as const
 
 /**
@@ -451,6 +469,8 @@ export const adminSessions = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    /** telegram: the bot's Open admin button; browser: desktop sign-in with a code from the bot */
+    channel: text('channel', { enum: ['telegram', 'browser'] }).notNull().default('telegram'),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('admin_sessions_token_key').on(t.tokenHash), index('admin_sessions_admin_idx').on(t.adminId)],
@@ -594,6 +614,243 @@ export const media = pgTable(
   (t) => [uniqueIndex('media_sha256_key').on(t.sha256)],
 )
 
+/* ============================================================================
+ * Engagement: feature switches, bot messages, offers, streaks, transfers,
+ * browser admin sign-in
+ * ========================================================================== */
+
+/**
+ * The global switch per feature (packages/shared/src/features.ts lists them).
+ * No row = the feature's default.
+ */
+export const featureFlags = pgTable('feature_flags', {
+  key: text('key').primaryKey(),
+  enabled: boolean('enabled').notNull(),
+  updatedByAdminId: uuid('updated_by_admin_id').references(() => adminUsers.id),
+  updatedAt: updatedAt(),
+})
+
+/**
+ * Per-player overrides of a feature switch. Removing one sets cleared_at, so
+ * the history of who had what stays; at most one live override per player.
+ */
+export const featureFlagOverrides = pgTable(
+  'feature_flag_overrides',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    flagKey: text('flag_key').notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    enabled: boolean('enabled').notNull(),
+    note: text('note').notNull(),
+    createdByAdminId: uuid('created_by_admin_id').references(() => adminUsers.id),
+    clearedAt: timestamp('cleared_at', { withTimezone: true }),
+    clearedByAdminId: uuid('cleared_by_admin_id').references(() => adminUsers.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('feature_flag_overrides_live_key').on(t.flagKey, t.userId).where(sql`${t.clearedAt} is null`),
+    index('feature_flag_overrides_user_idx').on(t.userId),
+  ],
+)
+
+export const BROADCAST_KINDS = ['announcement', 'feature', 'raffle_new', 'raffle_cancelled'] as const
+
+/**
+ * One message to many players. Created by an admin (notice, announcement), by
+ * turning a feature on, or by a raffle opening. A worker fans it out into
+ * notifications in batches (cursor_user_id), so a million players never means
+ * one huge transaction.
+ */
+export const broadcasts = pgTable(
+  'broadcasts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('kind', { enum: BROADCAST_KINDS }).notNull(),
+    title: text('title').notNull().default(''),
+    /** Plain text as the admin wrote it (escaped when sent) */
+    text: text('text').notNull(),
+    openButton: boolean('open_button').notNull().default(true),
+    /** BroadcastAudience (admin-schemas); for type 'users', usernames are already resolved to user ids */
+    audience: jsonb('audience').notNull(),
+    status: text('status', { enum: ['fanning_out', 'sending', 'done', 'cancelled'] }).notNull().default('fanning_out'),
+    /** Fan-out progress: users are queued in id order after this one */
+    cursorUserId: uuid('cursor_user_id'),
+    total: integer('total').notNull().default(0),
+    /** What caused it, e.g. raffle + <id> or feature + <key> */
+    refType: text('ref_type'),
+    refId: text('ref_id'),
+    createdByAdminId: uuid('created_by_admin_id').references(() => adminUsers.id),
+    createdAt: createdAt(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [index('broadcasts_status_idx').on(t.status, t.createdAt)],
+)
+
+export const NOTIFICATION_KINDS = [
+  'reminder',
+  'comeback',
+  'announcement',
+  'feature',
+  'raffle_new',
+  'raffle_cancelled',
+  'transfer',
+  'system',
+] as const
+
+export interface NotificationButton {
+  text: string
+  /** Opens the Mini App at this URL */
+  webApp?: string
+  /** Sent back to the bot as a callback query */
+  callbackData?: string
+}
+
+/**
+ * The bot's outbox: one row per message to one player. The sender claims
+ * pending rows (FOR UPDATE SKIP LOCKED), sends at a pace Telegram accepts, and
+ * records the outcome. Never deleted, so the admin can always see what each
+ * player was sent and why something failed.
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    /** Private chat id = the player's Telegram id */
+    telegramId: bigint('telegram_id', { mode: 'number' }).notNull(),
+    kind: text('kind', { enum: NOTIFICATION_KINDS }).notNull(),
+    /** Which reminder text (r01..) or template produced it */
+    templateKey: text('template_key'),
+    /** Telegram HTML, ready to send */
+    text: text('text').notNull(),
+    /** Inline keyboard rows */
+    buttons: jsonb('buttons').$type<NotificationButton[][]>(),
+    broadcastId: uuid('broadcast_id').references(() => broadcasts.id),
+    /** Makes an enqueue idempotent per player, e.g. raffle_new:<raffleId> */
+    dedupeKey: text('dedupe_key'),
+    status: text('status', { enum: ['pending', 'sending', 'sent', 'failed', 'skipped'] }).notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    /** Not sent before this (quiet hours, Telegram's retry_after, backoff) */
+    notBefore: timestamp('not_before', { withTimezone: true }).notNull().defaultNow(),
+    /** When a sender claimed it; a claim older than a few minutes is taken back */
+    lockedAt: timestamp('locked_at', { withTimezone: true }),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    telegramMessageId: bigint('telegram_message_id', { mode: 'number' }),
+    error: text('error'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('notifications_due_idx').on(t.status, t.notBefore),
+    index('notifications_user_idx').on(t.userId, t.createdAt),
+    index('notifications_broadcast_idx').on(t.broadcastId, t.status),
+    uniqueIndex('notifications_dedupe_key').on(t.userId, t.dedupeKey).where(sql`${t.dedupeKey} is not null`),
+  ],
+)
+
+/**
+ * "Come back and get 1 free Raff": offered once per spell away (a spell starts
+ * at the last open, spell_started_at), credited on the next open before it expires.
+ */
+export const comebackOffers = pgTable(
+  'comeback_offers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    raffs: integer('raffs').notNull(),
+    /** users.last_seen_at when the offer was made: one offer per spell away */
+    spellStartedAt: timestamp('spell_started_at', { withTimezone: true }).notNull(),
+    offeredAt: timestamp('offered_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    ledgerId: uuid('ledger_id').references(() => ledger.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('comeback_offers_spell_key').on(t.userId, t.spellStartedAt),
+    index('comeback_offers_user_idx').on(t.userId, t.offeredAt),
+  ],
+)
+
+/** One row per Lagos calendar day a player claimed the daily streak bonus. Insert-only. */
+export const dailyCheckins = pgTable(
+  'daily_checkins',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    /** Lagos calendar day, YYYY-MM-DD */
+    day: date('day', { mode: 'string' }).notNull(),
+    /** Streak length including this day */
+    streak: integer('streak').notNull(),
+    raffs: integer('raffs').notNull(),
+    ledgerId: uuid('ledger_id').references(() => ledger.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('daily_checkins_user_day_key').on(t.userId, t.day)],
+)
+
+/** Raffs sent from one player to another (feature raffs_transfer). Insert-only. */
+export const raffsTransfers = pgTable(
+  'raffs_transfers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    fromUserId: uuid('from_user_id')
+      .notNull()
+      .references(() => users.id),
+    toUserId: uuid('to_user_id')
+      .notNull()
+      .references(() => users.id),
+    raffs: integer('raffs').notNull(),
+    note: text('note').notNull().default(''),
+    idempotencyKey: uuid('idempotency_key').notNull(),
+    outLedgerId: uuid('out_ledger_id')
+      .notNull()
+      .references(() => ledger.id),
+    inLedgerId: uuid('in_ledger_id')
+      .notNull()
+      .references(() => ledger.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('raffs_transfers_idempotency_key').on(t.fromUserId, t.idempotencyKey),
+    index('raffs_transfers_from_idx').on(t.fromUserId, t.createdAt),
+    index('raffs_transfers_to_idx').on(t.toUserId, t.createdAt),
+  ],
+)
+
+/**
+ * Browser (desktop) admin sign-in: after the master password, username and
+ * password are accepted, a 6-digit code goes to the admin's bound Telegram
+ * account through the bot. Five wrong codes or five minutes end the challenge.
+ */
+export const adminWebLogins = pgTable(
+  'admin_web_logins',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    adminId: uuid('admin_id')
+      .notNull()
+      .references(() => adminUsers.id),
+    /** sha256 of challenge id + code */
+    codeHash: text('code_hash').notNull(),
+    ipHash: text('ip_hash'),
+    userAgent: text('user_agent'),
+    attempts: integer('attempts').notNull().default(0),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index('admin_web_logins_admin_idx').on(t.adminId, t.createdAt)],
+)
+
+export type NotificationRow = typeof notifications.$inferSelect
+export type BroadcastRow = typeof broadcasts.$inferSelect
 export type RaffleRow = typeof raffles.$inferSelect
 export type RafflePrizeRow = typeof rafflePrizes.$inferSelect
 export type EntryRow = typeof entries.$inferSelect

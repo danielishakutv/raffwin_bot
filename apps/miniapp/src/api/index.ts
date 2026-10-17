@@ -7,7 +7,7 @@ import { env } from '@/services/env'
 import * as http from './http'
 import * as mock from './mock'
 
-export type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse } from './mock'
+export type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse, SendRaffsRequest } from './mock'
 
 /** True when talking to the real API; the UI hides demo-only controls. */
 export const usingRealApi = env.apiUrl !== ''
@@ -25,6 +25,9 @@ export const updateProfile = impl.updateProfile
 export const updateContactPrefs = impl.updateContactPrefs
 export const submitVerification = impl.submitVerification
 export const setVerificationStatus = impl.setVerificationStatus
+export const savePhone = impl.savePhone
+export const setReminders = impl.setReminders
+export const setDemoFeature = impl.setDemoFeature
 export const getRate = impl.getRate
 export const getLive = impl.getLive
 export const startAdminSignIn = impl.startAdminSignIn
@@ -35,6 +38,11 @@ export const drawRaffle = impl.drawRaffle
 export const buyRaffs = impl.buyRaffs
 export const getTransactions = impl.getTransactions
 export const getEntries = impl.getEntries
+export const getStreak = impl.getStreak
+export const claimStreak = impl.claimStreak
+export const getTransferLimits = impl.getTransferLimits
+export const findRecipient = impl.findRecipient
+export const sendRaffs = impl.sendRaffs
 export const getReferralSummary = impl.getReferralSummary
 export const getReferredPeople = impl.getReferredPeople
 export const getReferralEarnings = impl.getReferralEarnings

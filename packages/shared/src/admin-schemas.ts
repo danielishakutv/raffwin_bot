@@ -108,7 +108,102 @@ export const expenseBody = z.object({
   note: z.string().trim().min(3, 'Say what it was for').max(300),
 })
 
+/* Browser (desktop) sign-in --------------------------------------------------- */
+
+/** POST /admin/v1/auth/web/start: the same secrets as the bot sign-in */
+export const webLoginStartBody = z.object({
+  master: z.string().min(1).max(200),
+  username: z.string().trim().min(1).max(64),
+  password: z.string().min(1).max(200),
+})
+
+/** POST /admin/v1/auth/web/verify: the code the bot sent to the admin's Telegram */
+export const webLoginVerifyBody = z.object({
+  challengeId: z.string().uuid(),
+  code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code from the bot'),
+})
+
+/* Features -------------------------------------------------------------------- */
+
+/** PUT /admin/v1/features/:key */
+export const featureToggleBody = z.object({
+  enabled: z.boolean(),
+  /** Message every player through the bot (only when turning on) */
+  announce: z.boolean().default(false),
+  /** The announcement text; defaults to the feature's suggested text */
+  message: z.string().trim().min(5).max(3000).optional(),
+  reason: z.string().trim().max(500).default(''),
+})
+
+/** POST /admin/v1/features/:key/overrides */
+export const featureOverrideBody = z.object({
+  /** Username (with or without @) or Telegram id */
+  user: z.string().trim().min(2).max(41),
+  enabled: z.boolean(),
+  note: z.string().trim().min(3, 'Say why, in a few words').max(300),
+  /** Tell that player through the bot (only when enabling) */
+  notify: z.boolean().default(false),
+  message: z.string().trim().min(5).max(3000).optional(),
+})
+
+/* Messages -------------------------------------------------------------------- */
+
+export const BROADCAST_AUDIENCES = ['all', 'no_phone', 'inactive', 'users'] as const
+
+export const broadcastAudience = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('all') }),
+  /** Players who have not shared a phone number yet */
+  z.object({ type: z.literal('no_phone') }),
+  /** Players who have not opened the app for at least this many days */
+  z.object({ type: z.literal('inactive'), days: z.number().int().min(1).max(365) }),
+  /** Named players: usernames (with or without @) or Telegram ids */
+  z.object({ type: z.literal('users'), users: z.array(z.string().trim().min(2).max(41)).min(1).max(500) }),
+])
+
+/** POST /admin/v1/broadcasts: a notice or announcement sent by the bot to players' private chats */
+export const broadcastBody = z.object({
+  /** Bold first line; optional */
+  title: z.string().trim().max(120).default(''),
+  /** Plain text; line breaks kept. Sent escaped, so nothing in it is treated as markup. */
+  text: z.string().trim().min(2, 'Write the message').max(3500),
+  /** Adds an "Open Raffle Win" button under the message */
+  openButton: z.boolean().default(true),
+  audience: broadcastAudience,
+  /** true: send only to the admin's own Telegram, to see how it looks */
+  test: z.boolean().default(false),
+})
+
+/** PUT /admin/v1/engagement: reminders, come-back offer, streak rewards, transfer caps */
+export const engagementBody = z
+  .object({
+    reminderMinHours: z.number().int().min(1).max(72),
+    reminderMaxHours: z.number().int().min(1).max(72),
+    maxRemindersPerSpell: z.number().int().min(0).max(50),
+    quietStartHour: z.number().int().min(0).max(23),
+    quietEndHour: z.number().int().min(0).max(23),
+    comebackAfterHours: z.number().int().min(12).max(24 * 30),
+    /** "max 1 Raff": the offer is 0 (off) or 1 */
+    comebackRaffs: z.number().int().min(0).max(1),
+    comebackCooldownDays: z.number().int().min(1).max(90),
+    streakRewards: z.array(z.number().int().min(0).max(1000)).min(1).max(30),
+    transferMinRaffs: z.number().int().min(1).max(1_000_000),
+    transferDailyMaxRaffs: z.number().int().min(1).max(10_000_000),
+  })
+  .superRefine((v, ctx) => {
+    if (v.reminderMaxHours < v.reminderMinHours) {
+      ctx.addIssue({ code: 'custom', path: ['reminderMaxHours'], message: 'Must be at least the minimum' })
+    }
+    if (v.transferDailyMaxRaffs < v.transferMinRaffs) {
+      ctx.addIssue({ code: 'custom', path: ['transferDailyMaxRaffs'], message: 'Must be at least the minimum transfer' })
+    }
+  })
+
 export type RaffleBody = z.infer<typeof raffleBody>
+export type FeatureToggleBody = z.infer<typeof featureToggleBody>
+export type FeatureOverrideBody = z.infer<typeof featureOverrideBody>
+export type BroadcastBody = z.infer<typeof broadcastBody>
+export type BroadcastAudience = z.infer<typeof broadcastAudience>
+export type EngagementBody = z.infer<typeof engagementBody>
 export type ExpenseBody = z.infer<typeof expenseBody>
 export type RateBaseBody = z.infer<typeof rateBaseBody>
 export type LimitsBody = z.infer<typeof limitsBody>

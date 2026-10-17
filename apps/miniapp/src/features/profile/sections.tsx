@@ -1,4 +1,5 @@
-import { Check } from 'lucide-react'
+import { Check, Phone } from 'lucide-react'
+import type { FeatureKey } from '@raffwin/shared'
 import { useEffect, useState } from 'react'
 import * as api from '@/api'
 import { errorMessage } from '@/api/errors'
@@ -39,10 +40,10 @@ function useSaveState() {
 }
 
 /* ----------------------------------------------------------------------------
- * Personal info: name and username. The phone comes from Telegram on the KYC
- * page and is shown here read-only.
+ * Personal info: name and username. The phone is never typed: Telegram shares
+ * it (onPhone opens that flow), so it is shown here with an Add/Update action.
  * -------------------------------------------------------------------------- */
-export function PersonalInfoSection({ profile }: { profile: Profile }) {
+export function PersonalInfoSection({ profile, onPhone }: { profile: Profile; onPhone: () => void }) {
   const updateProfile = useAppStore((s) => s.updateProfile)
   const [form, setForm] = useState({ fullName: profile.fullName, username: profile.username })
   const [availability, setAvailability] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle')
@@ -104,12 +105,19 @@ export function PersonalInfoSection({ profile }: { profile: Profile }) {
           suffix={availability === 'checking' ? <Spinner className="h-4 w-4 text-mist" /> : null}
         />
       </Field>
-      <div>
-        <p className="text-[13px] font-semibold text-mist">Phone number</p>
-        <p className="mt-1 text-[15px] font-bold">{profile.phone ? formatPhoneDisplay(profile.phone) : 'Not given yet'}</p>
-        <p className="text-[12px] text-haze">
-          {profile.phoneVerified ? 'Verified by Telegram.' : 'Shared from Telegram on the prize delivery (KYC) page.'}
-        </p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[13px] font-semibold text-mist">Phone number</p>
+          <p className="mt-1 text-[15px] font-bold">{profile.phone ? formatPhoneDisplay(profile.phone) : 'Not added yet'}</p>
+          <p className="text-[12px] text-haze">
+            {profile.phone
+              ? `${profile.phoneVerified ? 'Verified by Telegram. ' : ''}Used only to reach you about prizes; never shown to other players.`
+              : 'Needed so we can reach you if you win.'}
+          </p>
+        </div>
+        <BouncyButton size="sm" variant={profile.phone ? 'secondary' : 'sun'} sfx="click" icon={<Phone size={16} />} onClick={onPhone} className="shrink-0">
+          {profile.phone ? 'Update' : 'Add'}
+        </BouncyButton>
       </div>
       <SaveButton
         saving={saving}
@@ -137,9 +145,51 @@ export function ContactSection({ profile }: { profile: Profile }) {
         checked={prefs.whatsapp}
         onChange={set('whatsapp')}
         label="WhatsApp"
-        description={profile.phone ? `Delivery updates on ${formatPhoneDisplay(profile.phone)}` : 'Delivery updates, once you give your phone on the KYC page'}
+        description={profile.phone ? `Delivery updates on ${formatPhoneDisplay(profile.phone)}` : 'Delivery updates, once you add your phone number'}
       />
     </div>
+  )
+}
+
+/* ----------------------------------------------------------------------------
+ * Bot reminders: the player's own switch for nudges and come-back offers.
+ * Draw results, prize messages and announcements are not affected.
+ * -------------------------------------------------------------------------- */
+export function BotMessagesSection({ profile }: { profile: Profile }) {
+  const setReminders = useAppStore((s) => s.setReminders)
+  // Both automations switched off for everyone: say so; the player's switch still records their choice
+  const pausedForAll = useAppStore((s) => !s.features.reminders && !s.features.comeback_offer)
+  const [busy, setBusy] = useState(false)
+  // An API from before this setting existed sends nothing: reminders were on
+  const on = profile.remindersOn !== false
+
+  const change = async (next: boolean) => {
+    setBusy(true)
+    try {
+      await setReminders(next)
+      toast.success(next ? 'Reminders are on' : 'Reminders are off. Results, prizes and announcements still reach you.')
+    } catch (error) {
+      toast.error(errorMessage(error))
+      sound.play('error')
+      haptics.notify('error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Toggle
+      checked={on}
+      disabled={busy}
+      onChange={(next) => void change(next)}
+      label="Reminders from the bot"
+      description={
+        <>
+          A short nudge when you have been away for a while, and come-back offers. Draw results, prizes and announcements always reach you.
+          {pausedForAll && ' Paused for everyone at the moment.'}
+        </>
+      }
+    />
   )
 }
 
@@ -150,6 +200,8 @@ export function DemoControls() {
   const expireRateNow = useAppStore((s) => s.expireRateNow)
   const resetDemo = useAppStore((s) => s.resetDemo)
   const signOut = useAppStore((s) => s.signOut)
+  const features = useAppStore((s) => s.features)
+  const setDemoFeature = useAppStore((s) => s.setDemoFeature)
   const [busy, setBusy] = useState<string | null>(null)
 
   const act = async (key: string, fn: () => Promise<void>, message: string) => {
@@ -164,8 +216,27 @@ export function DemoControls() {
     }
   }
 
+  // What a super admin's feature switches do, so the demo can show a feature appearing and vanishing
+  const demoSwitches: { key: FeatureKey; label: string; description: string }[] = [
+    { key: 'raffs_transfer', label: 'Send Raffs', description: 'Wallet button to send Raffs to another player' },
+    { key: 'daily_streak', label: 'Daily streak', description: 'Daily bonus card on Home' },
+    { key: 'require_phone_for_entry', label: 'Phone needed to enter', description: 'Entering a raffle asks for the phone first' },
+  ]
+
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-col divide-y divide-white/8">
+        {demoSwitches.map((f) => (
+          <Toggle
+            key={f.key}
+            checked={features[f.key]}
+            disabled={busy === f.key}
+            label={f.label}
+            description={f.description}
+            onChange={(on) => void act(f.key, () => setDemoFeature(f.key, on), `${f.label} ${on ? 'on' : 'off'}`)}
+          />
+        ))}
+      </div>
       <BouncyButton variant="secondary" sfx="click" onClick={() => { expireRateNow(); toast.info('Rate expired. Fetching a new quote.') }}>
         Refresh the rate now
       </BouncyButton>

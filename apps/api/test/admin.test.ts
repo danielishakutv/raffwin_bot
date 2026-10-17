@@ -6,10 +6,21 @@ import { verifyChain } from '../src/admin/audit'
 import { hashPassword, issueTicket } from '../src/admin/session'
 import { recordSecurityEvent } from '../src/lib/security-events'
 import { adminSessions, adminUsers, raffles, securityEvents, type AdminRole } from '../src/db/schema'
-import { createRaffle, credit, member } from './fixtures'
-import { initData, telegramId, testApp } from './helpers'
+import { createRaffle, credit, member as open } from './fixtures'
+import { contactProof, initData, nigerianPhone, telegramId, testApp } from './helpers'
 
 const { http, db, ctx, clock } = testApp()
+
+/**
+ * A player who has shared their phone (the onboarding step): entering a raffle
+ * needs one while require_phone_for_entry is on, its default.
+ */
+async function member(...args: Parameters<typeof open>) {
+  const m = await open(...args)
+  const res = await m.put('/v1/phone', { contactProof: contactProof(m.telegramId, nigerianPhone().slice(1)) })
+  expect(res.status, JSON.stringify(res.body)).toBe(200)
+  return m
+}
 
 interface Admin {
   id: string

@@ -10,8 +10,12 @@ import {
   enterRaffleBody,
   profilePatchBody,
   kycBody,
+  phoneBody,
+  recipientQuery,
   refreshBody,
+  remindersBody,
   telegramAuthBody,
+  transferBody,
   usernameQuery,
 } from '@raffwin/shared/schemas'
 import { validateUsername } from '@raffwin/shared'
@@ -26,6 +30,8 @@ import { recentTransactions } from '../services/ledger'
 import * as raffles from '../services/raffles'
 import { currentQuote, toRateQuote } from '../services/rates'
 import * as referrals from '../services/referrals'
+import * as streak from '../services/streak'
+import * as transfers from '../services/transfers'
 import { masterPrompt, startAdminSignIn } from '../bot/admin-login'
 import { authOf, requestMeta, requireAuth } from './middleware'
 
@@ -72,6 +78,12 @@ export function v1Routes(ctx: AppContext): Router {
     res.json(await account.saveKyc(ctx, me(req), kycBody.parse(req.body), requestMeta(ctx, req)))
   })
 
+  // The phone alone, from Telegram's signed contact share (onboarding step, or later)
+  router.put('/phone', authed, async (req, res) => {
+    const { contactProof } = phoneBody.parse(req.body)
+    res.json(await account.savePhone(ctx, me(req), contactProof, requestMeta(ctx, req)))
+  })
+
   router.post('/onboarding/complete', authed, async (req, res) => {
     res.json(await account.completeOnboarding(ctx, me(req)))
   })
@@ -86,6 +98,12 @@ export function v1Routes(ctx: AppContext): Router {
 
   router.put('/profile/contact-prefs', authed, async (req, res) => {
     res.json(await account.updateContactPrefs(ctx, me(req), contactPrefsBody.parse(req.body)))
+  })
+
+  // Bot reminders and come-back offers on or off
+  router.put('/profile/reminders', authed, async (req, res) => {
+    const { on } = remindersBody.parse(req.body)
+    res.json(await account.updateReminders(ctx, me(req), on))
   })
 
   /* Rate, raffles, entries, wallet history -------------------------------- */
@@ -136,6 +154,29 @@ export function v1Routes(ctx: AppContext): Router {
 
   router.get('/transactions', authed, async (req, res) => {
     res.json(await recentTransactions(ctx.db, me(req).id))
+  })
+
+  /* Daily streak and Send Raffs (feature switches: FEATURE_OFF when off) - */
+
+  router.get('/streak', authed, async (req, res) => {
+    res.json(await streak.getStreak(ctx, me(req)))
+  })
+
+  router.post('/streak/claim', authed, async (req, res) => {
+    res.json(await streak.claimStreak(ctx, me(req)))
+  })
+
+  router.get('/transfers/limits', authed, async (req, res) => {
+    res.json(await transfers.getLimits(ctx, me(req)))
+  })
+
+  router.get('/transfers/recipient', authed, async (req, res) => {
+    const { username } = recipientQuery.parse(req.query)
+    res.json(await transfers.findRecipient(ctx, me(req), username))
+  })
+
+  router.post('/transfers', authed, async (req, res) => {
+    res.status(201).json(await transfers.sendRaffs(ctx, me(req), transferBody.parse(req.body)))
   })
 
   /* Admin sign-in from the app ------------------------------------------ */

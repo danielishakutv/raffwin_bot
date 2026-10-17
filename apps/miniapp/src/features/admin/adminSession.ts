@@ -6,13 +6,19 @@
  * Telegram apps without secure storage, sign in again after closing. It starts from the one-time ticket on the bot's "Open admin"
  * button (?admin_ticket=...), exchanged together with this Mini App's signed
  * initData, so a ticket copied out of the chat is useless anywhere else.
+ *
+ * In a normal browser (desktop) the admin signs in with the same secrets plus
+ * a code from the bot instead (webLoginStart / webLoginVerify below).
  */
 import { create } from 'zustand'
-import type { AdminLoginResponse, AdminMe } from '@raffwin/shared/admin-types'
+import type { AdminLoginResponse, AdminMe, AdminWebLoginChallenge } from '@raffwin/shared/admin-types'
 import { isApiErrorCode, type ApiErrorBody } from '@raffwin/shared'
-import { ApiError } from '@/api/errors'
+import { ApiError, errorMessage } from '@/api/errors'
 import { env } from '@/services/env'
 import { getWebApp } from '@/services/telegram'
+
+/** The same three secrets as the bot sign-in (webLoginStartBody) */
+type WebLoginStartBody = { master: string; username: string; password: string }
 
 interface AdminSessionState {
   token: string | null
@@ -37,9 +43,103 @@ export const useAdminSession = create<AdminSessionState>((set) => ({
   set: (s) => set(s),
   clear: (error = null) => {
     void forgetStored()
+    forgetBrowser()
     set({ token: null, expiresAt: null, idleMinutes: null, me: null, kept: null, error })
   },
 }))
+
+/* Browser (desktop) sign-in --------------------------------------------------
+ * Outside Telegram the admin signs in with the same three secrets plus a
+ * 6-digit code the bot sends to their bound Telegram account. The token is
+ * kept in sessionStorage (this tab only, gone when it closes) so a refresh
+ * keeps the session; never localStorage.
+ * -------------------------------------------------------------------------- */
+
+const WEB_KEY = 'raffwin_admin_web_session'
+
+function forgetBrowser(): void {
+  try {
+    sessionStorage.removeItem(WEB_KEY)
+  } catch (error) {
+    // Storage blocked: nothing was stored there either
+    console.warn('[admin] could not remove the browser session', error)
+  }
+}
+
+function keepBrowser(login: AdminLoginResponse): string {
+  try {
+    sessionStorage.setItem(WEB_KEY, JSON.stringify({ token: login.token, expiresAt: login.expiresAt, idleMinutes: login.idleMinutes }))
+    return 'A refresh keeps you signed in; closing this tab locks the admin.'
+  } catch (error) {
+    console.warn('[admin] sessionStorage refused the browser session', error)
+    return 'This browser blocks session storage, so a refresh locks the admin.'
+  }
+}
+
+/** POST /auth/web/start: the three secrets; the bot sends a code to the admin's Telegram. */
+export async function webLoginStart(body: WebLoginStartBody): Promise<AdminWebLoginChallenge> {
+  return postOpen<AdminWebLoginChallenge>('/auth/web/start', body)
+}
+
+/** POST /auth/web/verify: the code from the bot. On success the admin is unlocked in this tab. */
+export async function webLoginVerify(challengeId: string, code: string): Promise<void> {
+  const login = await postOpen<AdminLoginResponse>('/auth/web/verify', { challengeId, code })
+  useAdminSession.getState().set({ token: login.token, expiresAt: login.expiresAt, idleMinutes: login.idleMinutes, me: login.admin, error: null, kept: keepBrowser(login) })
+}
+
+/** Unauthenticated POST (sign-in steps): errors are thrown for the form, the session is not touched. */
+async function postOpen<T>(path: string, body: unknown): Promise<T> {
+  if (!env.apiUrl) throw new ApiError('NOT_READY', 'This build runs without the Raffle Win API (demo), so the admin cannot sign in here.')
+  let res: Response
+  try {
+    res = await fetch(`${env.apiUrl}/admin/v1${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  } catch (error) {
+    console.warn('[admin] network error', path, error)
+    throw new ApiError('SERVER_ERROR', 'Could not reach Raffle Win. Check the connection and try again.')
+  }
+  return parse<T>(res)
+}
+
+/**
+ * Browser tab refreshed: a stored session carries on if the API still accepts
+ * it (GET /me). Never rejects; returns true when the admin is unlocked.
+ */
+export async function resumeBrowser(): Promise<boolean> {
+  let raw: string | null
+  try {
+    raw = sessionStorage.getItem(WEB_KEY)
+  } catch (error) {
+    console.warn('[admin] could not read the browser session', error)
+    return false
+  }
+  if (!raw) return false
+  let stored: { token?: unknown; expiresAt?: unknown; idleMinutes?: unknown }
+  try {
+    stored = JSON.parse(raw) as typeof stored
+  } catch (error) {
+    console.warn('[admin] browser session unreadable; removing it', error)
+    forgetBrowser()
+    return false
+  }
+  if (typeof stored.token !== 'string' || typeof stored.expiresAt !== 'number' || stored.expiresAt <= Date.now()) {
+    forgetBrowser()
+    return false
+  }
+  const idleMinutes = typeof stored.idleMinutes === 'number' ? stored.idleMinutes : null
+  useAdminSession.getState().set({ token: stored.token, expiresAt: stored.expiresAt, idleMinutes, error: null })
+  try {
+    const me = await adminCall<AdminMe>('GET', '/me')
+    useAdminSession.getState().set({ me, kept: 'A refresh keeps you signed in; closing this tab locks the admin.' })
+    return true
+  } catch (error) {
+    // A 401 already cleared the session with its reason; anything else is shown on the sign-in form
+    if (!(error instanceof ApiError && error.code === 'AUTH_INVALID')) {
+      console.warn('[admin] could not resume the browser session', error)
+      useAdminSession.getState().set({ token: null, me: null, error: errorMessage(error) })
+    }
+    return false
+  }
+}
 
 const STORE_KEY = 'raffwin_admin_session'
 const STORE_TIMEOUT_MS = 3000
@@ -188,7 +288,7 @@ export async function adminFetchBlob(path: string, body: unknown): Promise<Blob>
 
 async function send<T>(method: string, path: string, body?: { type: string; data: BodyInit }, asBlob = false): Promise<T> {
   const { token } = useAdminSession.getState()
-  if (!token) throw new ApiError('AUTH_INVALID', 'The admin is locked. Sign in from the bot again.')
+  if (!token) throw new ApiError('AUTH_INVALID', getWebApp()?.initData ? 'The admin is locked. Sign in from the bot again.' : 'The admin is locked. Sign in again.')
   let res: Response
   try {
     res = await fetch(`${env.apiUrl}/admin/v1${path}`, {

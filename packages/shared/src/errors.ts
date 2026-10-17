@@ -32,6 +32,14 @@ export const API_ERROR_CODES = [
   'INVALID_INPUT',
   'RATE_LIMITED',
   'SERVER_ERROR',
+  /** That feature is switched off (for everyone, or for this player) */
+  'FEATURE_OFF',
+  /** Share your phone number through Telegram first (entering a raffle, sending Raffs) */
+  'PHONE_REQUIRED',
+  /** Already claimed (today's streak bonus, an offer) */
+  'ALREADY_CLAIMED',
+  /** A daily or per-action cap was reached */
+  'LIMIT_REACHED',
 ] as const
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]

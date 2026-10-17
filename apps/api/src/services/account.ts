@@ -1,25 +1,24 @@
 /**
- * The player's own account: bootstrap, profile, KYC, contact preferences,
- * onboarding. There is no sign-up: the account is created complete on the
- * first open of the bot (services/auth.ts). Personal details beyond the
- * Telegram name are asked for only on the KYC page, to deliver a prize to the
- * player's nearest motor park. Responses use the shared shapes, so the Mini
- * App reads them exactly like the mock API.
+ * The player's own account: bootstrap, profile, phone, KYC, contact
+ * preferences, reminders, onboarding. There is no sign-up: the account is
+ * created complete on the first open of the bot (services/auth.ts). The phone
+ * is asked for at onboarding (services/phone.ts); the other personal details
+ * beyond the Telegram name are asked for only on the KYC page, to deliver a
+ * prize to the player's nearest motor park. Responses use the shared shapes,
+ * so the Mini App reads them exactly like the mock API.
  */
 import { and, eq, isNull, ne, or, sql } from 'drizzle-orm'
-import { normalizeNigerianPhone, type Bootstrap, type ContactPrefs, type Profile } from '@raffwin/shared'
+import type { Bootstrap, ContactPrefs, Profile } from '@raffwin/shared'
 import type { KycBody, ProfilePatchBody } from '@raffwin/shared/schemas'
 import type { AppContext, RequestMeta } from '../context'
 import { uniqueViolation } from '../db/client'
 import { adminUsers, deliveryPoints, users, type DeliveryPointRow, type UserRow } from '../db/schema'
 import { HttpError } from '../lib/http-error'
-import { recordSecurityEvent } from '../lib/security-events'
-import { readSharedContact, verifyTelegramData } from '../lib/telegram-auth'
+import { claimComeback, setReminders } from './engagement'
+import { featuresFor } from './features'
 import { recentTransactions } from './ledger'
+import { flagSelfReferral, phoneInUseError, saveVerifiedPhone, verifyContactProof } from './phone'
 import { entriesForPlayer, listForPlayer } from './raffles'
-
-/** A contact share is fresh when it was made within this window. */
-const CONTACT_PROOF_MAX_AGE_SECONDS = 60 * 60
 
 export function toProfile(user: UserRow, delivery: DeliveryPointRow | null, isAdmin: boolean): Profile | null {
   if (!user.signedUpAt || !user.username || !user.fullName) return null
@@ -39,6 +38,7 @@ export function toProfile(user: UserRow, delivery: DeliveryPointRow | null, isAd
     contactPrefs: { whatsapp: user.contactWhatsapp, telegram: user.contactTelegram, email: user.contactEmail },
     // Identity documents are not collected (16 Oct): delivery is to a motor park, by name and phone
     verification: { status: 'unverified', idImage: null, selfieImage: null, submittedAt: null },
+    remindersOn: user.remindersOptOutAt === null,
   }
 }
 
@@ -87,20 +87,42 @@ async function profileOf(ctx: AppContext, user: UserRow): Promise<Profile> {
   return profile
 }
 
+/**
+ * A pending come-back offer is credited on this open, before the balance is
+ * read, so the balance the app shows already includes it. A failed claim is
+ * logged and the app opens without it: the offer stays unclaimed for the next
+ * open, and a bonus must never stop a player getting in.
+ */
+async function claimWelcomeBack(ctx: AppContext, userId: string): Promise<{ raffs: number } | null> {
+  try {
+    return await claimComeback(ctx, userId)
+  } catch (error) {
+    ctx.log.error({ err: error, userId }, 'come-back offer claim failed; opening the app without it')
+    return null
+  }
+}
+
 export async function bootstrap(ctx: AppContext, user: UserRow): Promise<Bootstrap> {
-  const [profile, raffleList, entryList, transactions] = await Promise.all([
-    profileOf(ctx, user),
-    listForPlayer(ctx.db, user.id, ctx.now()),
-    entriesForPlayer(ctx.db, user.id),
-    recentTransactions(ctx.db, user.id),
+  const welcomeBack = await claimWelcomeBack(ctx, user.id)
+  // Always read again, not only after our own claim: a second open at the same moment
+  // gets null (the first open's claim won) and must still show the balance with it
+  const current = await reload(ctx, user.id)
+  const [profile, raffleList, entryList, transactions, features] = await Promise.all([
+    profileOf(ctx, current),
+    listForPlayer(ctx.db, current.id, ctx.now()),
+    entriesForPlayer(ctx.db, current.id),
+    recentTransactions(ctx.db, current.id),
+    featuresFor(ctx.db, current.id),
   ])
   return {
     profile,
-    onboardingComplete: user.onboardingCompletedAt !== null,
-    balance: user.balanceCache,
+    onboardingComplete: current.onboardingCompletedAt !== null,
+    balance: current.balanceCache,
     raffles: raffleList,
     entries: entryList,
     transactions,
+    features,
+    welcomeBack,
   }
 }
 
@@ -116,10 +138,19 @@ export async function isUsernameAvailable(ctx: AppContext, username: string, sel
 function conflictError(error: unknown): HttpError | null {
   const constraint = uniqueViolation(error)
   if (constraint === 'users_username_key') return new HttpError('USERNAME_TAKEN', 'That username is already taken.')
-  if (constraint === 'users_phone_key') {
-    return new HttpError('PHONE_IN_USE', 'That phone number is already on another Raffle Win account. One account per person.')
-  }
+  if (constraint === 'users_phone_key') return phoneInUseError()
   return null
+}
+
+/**
+ * The phone alone (onboarding step, the dashboard card, or before an entry):
+ * from Telegram's signed contact share, only when the contact is this account
+ * itself. Does not complete KYC.
+ */
+export async function savePhone(ctx: AppContext, user: UserRow, contactProof: string, meta: RequestMeta): Promise<Profile> {
+  requireAccount(user)
+  const phone = await verifyContactProof(ctx, user, contactProof, meta)
+  return profileOf(ctx, await saveVerifiedPhone(ctx, user, phone, 'app', meta))
 }
 
 /**
@@ -131,7 +162,7 @@ function conflictError(error: unknown): HttpError | null {
 export async function saveKyc(ctx: AppContext, user: UserRow, body: KycBody, meta: RequestMeta): Promise<Profile> {
   requireAccount(user)
   let phone = user.phone
-  if (body.contactProof) phone = await verifiedPhone(ctx, user, body.contactProof, meta)
+  if (body.contactProof) phone = await verifyContactProof(ctx, user, body.contactProof, meta)
   else if (!user.phoneVerifiedAt) {
     throw new HttpError('PHONE_NOT_VERIFIED', 'Share your phone number through Telegram so the courier can call you.')
   }
@@ -156,68 +187,10 @@ export async function saveKyc(ctx: AppContext, user: UserRow, body: KycBody, met
         .onConflictDoUpdate({ target: deliveryPoints.userId, set: { ...point, updatedAt: sql`now()` } })
     })
   } catch (error) {
-    if (uniqueViolation(error) === 'users_phone_key' && phone && user.referredByUserId) {
-      await flagSelfReferral(ctx, user, phone, meta)
-    }
+    if (uniqueViolation(error) === 'users_phone_key' && phone) await flagSelfReferral(ctx, user, phone, meta)
     throw conflictError(error) ?? error
   }
   return profileOf(ctx, await reload(ctx, user.id))
-}
-
-async function verifiedPhone(ctx: AppContext, user: UserRow, proof: string, meta: RequestMeta): Promise<string> {
-  const verified = verifyTelegramData(proof, ctx.config.BOT_TOKEN, {
-    maxAgeSeconds: CONTACT_PROOF_MAX_AGE_SECONDS,
-    now: ctx.now(),
-  })
-  const contact = verified.ok ? readSharedContact(verified.fields) : null
-  const problem = !verified.ok
-    ? `contact_${verified.reason}`
-    : !contact
-      ? 'contact_missing'
-      : contact.user_id !== user.telegramId
-        ? 'contact_other_account'
-        : null
-  if (problem) {
-    await recordSecurityEvent(ctx.db, ctx.log, {
-      severity: problem === 'contact_other_account' || problem === 'contact_bad_hash' ? 'high' : 'medium',
-      category: 'fraud',
-      kind: problem,
-      ipHash: meta.ipHash,
-      route: meta.route,
-      userId: user.id,
-      requestId: meta.requestId,
-    })
-    throw new HttpError('PHONE_NOT_VERIFIED', 'Share your phone number through Telegram so the courier can call you.')
-  }
-  const phone = normalizeNigerianPhone((contact as { phone_number: string }).phone_number)
-  if (!phone) {
-    throw new HttpError('INVALID_INPUT', 'Raffle Win delivers in Nigeria only, to a Nigerian number on your Telegram account.', {
-      phone: 'Your Telegram account uses a number outside Nigeria.',
-    })
-  }
-  return phone
-}
-
-/**
- * The referral bond is set on first open, before any phone is known. One phone
- * belongs to one account, so the friend's KYC is refused when they verify the
- * referrer's own number; that refusal means one person on two Telegram
- * accounts and is recorded for review (earnings paid so far stay visible in
- * the ledger).
- */
-async function flagSelfReferral(ctx: AppContext, user: UserRow, phone: string, meta: RequestMeta): Promise<void> {
-  const [referrer] = await ctx.db.select({ phone: users.phone }).from(users).where(eq(users.id, user.referredByUserId as string))
-  if (referrer?.phone !== phone) return
-  await recordSecurityEvent(ctx.db, ctx.log, {
-    severity: 'high',
-    category: 'fraud',
-    kind: 'referral_self_same_phone',
-    ipHash: meta.ipHash,
-    route: meta.route,
-    userId: user.id,
-    requestId: meta.requestId,
-    details: { referrerUserId: user.referredByUserId },
-  })
 }
 
 export async function completeOnboarding(ctx: AppContext, user: UserRow): Promise<{ onboardingComplete: boolean }> {
@@ -261,5 +234,12 @@ export async function updateContactPrefs(ctx: AppContext, user: UserRow, prefs: 
       updatedAt: sql`now()`,
     })
     .where(eq(users.id, user.id))
+  return profileOf(ctx, await reload(ctx, user.id))
+}
+
+/** Bot reminders and come-back offers on or off (announcements are not affected). */
+export async function updateReminders(ctx: AppContext, user: UserRow, on: boolean): Promise<Profile> {
+  requireAccount(user)
+  await setReminders(ctx, user.id, on)
   return profileOf(ctx, await reload(ctx, user.id))
 }

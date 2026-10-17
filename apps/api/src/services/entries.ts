@@ -1,6 +1,7 @@
 /**
  * Entering a raffle (docs/ARCHITECTURE.md section 8). One transaction:
  *
+ *   0. (before it) the player has a phone, when require_phone_for_entry is on
  *   1. lock the raffle row          (serialises ticket numbers for this raffle)
  *   2. lock the player and referrer (in id order, so two transactions can never
  *                                    wait on each other's user rows)
@@ -18,6 +19,7 @@ import type { AppContext } from '../context'
 import { uniqueViolation } from '../db/client'
 import { entries, ledger, raffles, referralEarnings, users, type UserRow } from '../db/schema'
 import { HttpError } from '../lib/http-error'
+import { isFeatureOn } from './features'
 import { post, toTransaction, type Tx } from './ledger'
 import { getForPlayer, toEntry } from './raffles'
 import { getSetting } from './settings'
@@ -30,7 +32,7 @@ export interface EnterResult {
 }
 
 /** Midnight in Lagos (UTC+1, no daylight saving) at or before `now`. */
-function lagosDayStart(now: number): Date {
+export function lagosDayStart(now: number): Date {
   const LAGOS = 60 * 60 * 1000
   return new Date(Math.floor((now + LAGOS) / 86_400_000) * 86_400_000 - LAGOS)
 }
@@ -40,6 +42,11 @@ export async function enterRaffle(ctx: AppContext, player: UserRow, body: EnterR
 
   const replay = await findByKey(ctx, player.id, body.idempotencyKey)
   if (replay) return replay
+
+  // Winners must be reachable: with the switch on, no phone means no entry (nothing has moved yet)
+  if (!player.phone && (await isFeatureOn(ctx.db, 'require_phone_for_entry', player.id))) {
+    throw new HttpError('PHONE_REQUIRED', 'Share your phone number first, so we can reach you if you win.')
+  }
 
   const now = ctx.now()
   let created: { entryId: string }

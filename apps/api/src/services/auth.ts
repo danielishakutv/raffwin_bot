@@ -13,6 +13,7 @@ import { newReferralCode, newRefreshToken, sha256Hex } from '../lib/crypto'
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
 import { readInitDataUser, verifyTelegramData, type InitDataUser } from '../lib/telegram-auth'
+import { activityFields } from './engagement'
 
 export interface SessionTokens {
   accessToken: string
@@ -146,7 +147,11 @@ async function upsertTelegramUser(
     tgLastName: tg.last_name ?? null,
     tgLanguageCode: tg.language_code ?? null,
     tgIsPremium: tg.is_premium === true,
-    lastSeenAt: now,
+    // An app open: seen now, and the bot's reminder schedule starts again (services/engagement.ts)
+    ...(await activityFields(ctx)),
+    // Telegram says the bot may message this player: a 403 from before they allowed it no longer applies
+    // (if they still block it, the next message's 403 marks them again)
+    ...(tg.allows_write_to_pm === true ? { botBlockedAt: null } : {}),
   }
 
   const [existing] = await ctx.db.select().from(users).where(eq(users.telegramId, tg.id))

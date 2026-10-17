@@ -2,7 +2,7 @@
  * Data hooks and formatting shared by the admin tabs. Every call goes through
  * adminCall; errors are kept and shown, never swallowed.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Page } from '@raffwin/shared'
 import { errorMessage } from '@/api/errors'
 import { adminCall } from './adminSession'
@@ -26,13 +26,27 @@ export function useAction() {
   return { busy, error, run, clearError: useCallback(() => setError(null), []) }
 }
 
-/** Loads a path; with everyMs it also reloads on a timer while the screen is visible, so figures stay live. */
+/**
+ * Loads a path; with everyMs it also reloads on a timer while the screen is visible, so figures stay live.
+ * Only the latest request may land: a slow reply for an old path (a filter chip tapped away from) or one
+ * that started before setData (the saved object after a PUT) is dropped.
+ */
 export function useLoad<T>(path: string | null, everyMs?: number) {
-  const [data, setData] = useState<T | null>(null)
+  const [data, setDataState] = useState<T | null>(null)
+  const seq = useRef(0)
   const { busy, error, run } = useAction()
   const reload = useCallback(() => {
-    if (path) void run(() => adminCall<T>('GET', path)).then((d) => d !== undefined && setData(d))
+    if (!path) return
+    const mine = ++seq.current
+    void run(() => adminCall<T>('GET', path)).then((d) => {
+      if (d !== undefined && mine === seq.current) setDataState(d)
+    })
   }, [path, run])
+  /** Make a known-fresh value (e.g. a save's response) the data, outranking any read still in flight. */
+  const setData = useCallback((d: T) => {
+    seq.current++
+    setDataState(d)
+  }, [])
   useEffect(reload, [reload])
   useEffect(() => {
     if (!everyMs) return
@@ -41,7 +55,7 @@ export function useLoad<T>(path: string | null, everyMs?: number) {
     }, everyMs)
     return () => window.clearInterval(id)
   }, [everyMs, reload])
-  return { data, busy, error, reload }
+  return { data, busy, error, reload, setData }
 }
 
 /** Cursor-paged lists (security events, audit log). */
@@ -86,3 +100,23 @@ export function relative(iso: string, now = Date.now()): string {
 
 /** Digits only, for number inputs that must accept what people paste ("1,500") */
 export const digits = (v: string) => v.replace(/[^0-9]/g, '')
+
+/** Bot messages are stored as Telegram HTML; the admin shows their plain text (DOMParser runs no scripts). */
+export function plainText(html: string): string {
+  try {
+    return new DOMParser().parseFromString(html, 'text/html').body.textContent ?? html
+  } catch (error) {
+    console.warn('[admin] could not read a message as HTML; showing it raw', error)
+    return html
+  }
+}
+
+/** First message per field from a failed zod parse, keyed by its dotted path ('' for the whole form). */
+export function problemsOf(issues: readonly { path: readonly PropertyKey[]; message: string }[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const issue of issues) {
+    const key = issue.path.map(String).join('.')
+    if (!out[key]) out[key] = issue.message
+  }
+  return out
+}

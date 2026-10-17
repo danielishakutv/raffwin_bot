@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { ArrowDownLeft, ArrowUpRight, Gift, Receipt, SlidersHorizontal, Ticket, Trophy, Undo2, UserPlus } from 'lucide-react'
+import { ArrowUpRight, Receipt } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { staggerContainer, popIn } from '@/components/motion'
@@ -7,23 +7,13 @@ import { cn } from '@/components/ui/cn'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { useBackButton } from '@/hooks/useBackButton'
-import type { Transaction, TransactionType } from '@/data/types'
+import type { Transaction } from '@/data/types'
 import { formatDateTime, formatInt, formatNaira } from '@/services/format'
 import { sound } from '@/services/sound'
 import { useAppStore } from '@/store/useAppStore'
+import { TRANSACTION_ICONS, transactionKind } from './transactionMeta'
 
 type Filter = 'all' | 'in' | 'out'
-
-const icons: Record<TransactionType, React.ElementType> = {
-  purchase: ArrowDownLeft,
-  entry: Ticket,
-  bonus: Gift,
-  prize: Trophy,
-  refund: ArrowDownLeft,
-  referral: UserPlus,
-  referral_reversal: Undo2,
-  adjustment: SlidersHorizontal,
-}
 
 export function HistoryPage() {
   const navigate = useNavigate()
@@ -55,7 +45,7 @@ export function HistoryPage() {
         ))}
       </div>
       {list.length === 0 ? (
-        <EmptyState icon={<Receipt size={26} />} title="Nothing here yet" body="Purchases, entries, bonuses and prizes will show up here." />
+        <EmptyState icon={<Receipt size={26} />} title="Nothing here yet" body="Purchases, entries, bonuses, prizes and Raffs sent or received will show up here." />
       ) : (
         <motion.ul key={filter} variants={staggerContainer} initial="hidden" animate="show" className="flex flex-col gap-2">
           {list.map((t) => (
@@ -68,7 +58,8 @@ export function HistoryPage() {
 }
 
 function TransactionRow({ t }: { t: Transaction }) {
-  const Icon = t.status === 'failed' ? ArrowUpRight : icons[t.type]
+  const Icon = t.status === 'failed' ? ArrowUpRight : TRANSACTION_ICONS[t.type]
+  const kind = transactionKind(t.type)
   const positive = t.raffs > 0
   return (
     <motion.li variants={popIn} className="surface flex items-center gap-3 rounded-2xl p-3">
@@ -78,6 +69,7 @@ function TransactionRow({ t }: { t: Transaction }) {
       <div className="min-w-0 flex-1">
         <p className="truncate text-[14px] font-bold">{t.note}</p>
         <p className="text-[12px] text-mist">
+          {kind ? `${kind} · ` : ''}
           {formatDateTime(t.createdAt)}
           {t.naira !== null ? ` · ${formatNaira(t.naira)}` : ''}
         </p>

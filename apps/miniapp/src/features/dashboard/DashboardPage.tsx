@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
-import { ChevronRight, Flame, Sparkles, Ticket, Trophy, Volume2, VolumeX, Wallet } from 'lucide-react'
-import { useMemo } from 'react'
+import { ChevronRight, Flame, Phone, Sparkles, Ticket, Trophy, Volume2, VolumeX, Wallet } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { staggerContainer, popIn } from '@/components/motion'
 import { AnimatedNumber } from '@/components/ui/AnimatedNumber'
@@ -15,6 +15,8 @@ import { Sparkline } from '@/components/ui/Sparkline'
 import { useNow } from '@/hooks/useNow'
 import { useRate } from '@/hooks/useRate'
 import { getRaffleStatus, isEnterable, isUrgent } from '@/data/raffleStatus'
+import { PhoneSheet } from '@/features/phone/PhoneShare'
+import { StreakCard } from '@/features/streak/StreakCard'
 import { formatNaira } from '@/services/format'
 import { haptics } from '@/services/haptics'
 import { raffsToNaira } from '@/services/rates'
@@ -40,6 +42,7 @@ export function DashboardPage() {
   const setMuted = useAppStore((s) => s.setMuted)
   const { quote } = useRate()
   const now = useNow(30000)
+  const [phoneOpen, setPhoneOpen] = useState(false)
 
   const stats = useMemo(() => {
     const totalEntries = entries.reduce((sum, e) => sum + e.qty, 0)
@@ -139,6 +142,12 @@ export function DashboardPage() {
         </div>
       </motion.section>
 
+      {/* Players who skipped the phone step (or joined before it existed) */}
+      {!profile.phone && <PhoneCard onAdd={() => setPhoneOpen(true)} />}
+
+      {/* Only while the daily_streak feature is on for this player */}
+      <StreakCard />
+
       {/* Analytics */}
       <div className="grid grid-cols-2 gap-3">
         <StatTile
@@ -220,7 +229,29 @@ export function DashboardPage() {
           </div>
         </motion.section>
       )}
+
+      {/* Outside the card, so saving (which hides the card) does not tear the sheet away mid-success */}
+      <PhoneSheet open={phoneOpen} onClose={() => setPhoneOpen(false)} />
     </motion.div>
+  )
+}
+
+function PhoneCard({ onAdd }: { onAdd: () => void }) {
+  return (
+    <motion.section variants={popIn} className="flex flex-col gap-3 rounded-card border border-sun/40 bg-sun/10 p-4">
+      <div className="flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sun/20 text-sun">
+          <Phone size={20} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-[15px] font-bold leading-5">Add your phone number so we can reach you if you win</p>
+          <p className="mt-1 text-[13px] text-mist">Never shown to other players. Used only to reach you about prizes.</p>
+        </div>
+      </div>
+      <BouncyButton variant="sun" icon={<Phone size={18} />} onClick={onAdd}>
+        Add my number
+      </BouncyButton>
+    </motion.section>
   )
 }
 

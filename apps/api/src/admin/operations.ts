@@ -3,7 +3,7 @@
  * rate goes through approvals.ts instead; everything here is audit-logged.
  */
 import { randomUUID } from 'node:crypto'
-import { and, asc, desc, eq, gt, gte, ilike, inArray, lt, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lt, or, sql, type SQL } from 'drizzle-orm'
 import type { RaffleBody, LimitsBody } from '@raffwin/shared/admin-schemas'
 import type {
   AdminAuditRow,
@@ -20,8 +20,12 @@ import {
   adminUsers,
   approvals,
   auditLog,
+  comebackOffers,
+  dailyCheckins,
+  deliveryPoints,
   entries,
   ledger,
+  notifications,
   rafflePrizes,
   raffles,
   referralEarnings,
@@ -36,13 +40,15 @@ import { currentQuote } from '../services/rates'
 import { getAllSettings, putSetting } from '../services/settings'
 import { appendAudit } from './audit'
 import { recordSecurityEvent } from '../lib/security-events'
+import { userFeatures } from './features-admin'
+import { announceRaffleOpened, cancelBroadcastsFor, outboxTotals, toAdminNotification } from './messages'
 
 /* Raffles -------------------------------------------------------------------- */
 
 async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<AdminRaffle[]> {
   if (rows.length === 0) return []
   const prizes = await ctx.db
-    .select({ p: rafflePrizes, winner: users.username })
+    .select({ p: rafflePrizes, winner: users.username, winnerPhone: users.phone })
     .from(rafflePrizes)
     .leftJoin(users, eq(users.id, rafflePrizes.winnerUserId))
     .where(inArray(rafflePrizes.raffleId, rows.map((r) => r.id)))
@@ -74,6 +80,8 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
         raffsValue: x.p.raffsValue,
         costNaira: x.p.costNaira,
         winnerUsername: x.winner,
+        // To reach the winner about delivery
+        winnerPhone: x.winnerPhone,
         winnerTicket: x.p.winnerTicket,
       })),
     seedCommitment: r.seedCommitment,
@@ -193,7 +201,9 @@ export async function unpublishRaffle(ctx: AppContext, adminId: string, id: stri
       )
     }
     await tx.update(raffles).set({ status: 'draft', updatedAt: sql`now()` }).where(eq(raffles.id, id))
-    await appendAudit(tx, { adminId, action: 'raffle.unpublish', targetType: 'raffle', targetId: id, before: { status: 'open' }, after: { status: 'draft', reason } })
+    // Players are not alerted about a raffle they can no longer see
+    const alertsStopped = await cancelBroadcastsFor(tx, { type: 'raffle', id }, ['raffle_new'], new Date(ctx.now()))
+    await appendAudit(tx, { adminId, action: 'raffle.unpublish', targetType: 'raffle', targetId: id, before: { status: 'open' }, after: { status: 'draft', reason, alertsStopped } })
   })
   return getRaffle(ctx, id)
 }
@@ -209,7 +219,9 @@ export async function openRaffle(ctx: AppContext, adminId: string | null, id: st
     const [count] = await tx.select({ n: sql<number>`count(*)::int` }).from(rafflePrizes).where(eq(rafflePrizes.raffleId, id))
     if ((count?.n ?? 0) < 1) throw new HttpError('INVALID_INPUT', 'Add at least one prize before publishing.')
     await tx.update(raffles).set({ status: 'open', openedAt: sql`now()`, updatedAt: sql`now()` }).where(eq(raffles.id, id))
-    await appendAudit(tx, { adminId, action: 'raffle.open', targetType: 'raffle', targetId: id })
+    // The bot tells everyone with new raffle alerts on (queued; sent by the workers)
+    const broadcastId = await announceRaffleOpened(tx, row, count?.n ?? 1, adminId)
+    await appendAudit(tx, { adminId, action: 'raffle.open', targetType: 'raffle', targetId: id, after: { broadcastId } })
   })
   return getRaffle(ctx, id)
 }
@@ -231,11 +243,37 @@ function toSummary(u: UserRow, referredByUsername: string | null): AdminUserSumm
     signedUpAt: u.signedUpAt?.toISOString() ?? null,
     lastSeenAt: u.lastSeenAt?.toISOString() ?? null,
     referredByUsername,
+    phoneVerified: u.phone !== null && u.phoneVerifiedAt !== null,
+    botBlocked: u.botBlockedAt !== null,
   }
 }
 
-/** Search by username, name, email or phone (contains), or an exact Telegram id. */
-export async function searchUsers(ctx: AppContext, q: string): Promise<AdminUserSummary[]> {
+export const USER_FILTERS = ['no_phone', 'with_phone', 'blocked', 'inactive'] as const
+export type UserFilter = (typeof USER_FILTERS)[number]
+/** "Inactive" in the players list: not opened the app for this long */
+const INACTIVE_DAYS = 2
+
+function userFilterSql(ctx: AppContext, filter: UserFilter | undefined): SQL | undefined {
+  switch (filter) {
+    case 'no_phone':
+      return isNull(users.phone)
+    case 'with_phone':
+      return isNotNull(users.phone)
+    case 'blocked':
+      return isNotNull(users.botBlockedAt)
+    case 'inactive':
+      return lt(sql`coalesce(${users.lastSeenAt}, ${users.createdAt})`, new Date(ctx.now() - INACTIVE_DAYS * 86_400_000))
+    default:
+      return undefined
+  }
+}
+
+/**
+ * Search by username, name, email or phone (contains), or an exact Telegram
+ * id; optionally only players without a phone, with one, who blocked the bot,
+ * or inactive for 2+ days.
+ */
+export async function searchUsers(ctx: AppContext, q: string, filter?: UserFilter): Promise<AdminUserSummary[]> {
   const term = q.trim()
   const like = `%${term.replace(/[%_\\]/g, (c) => `\\${c}`)}%`
   const where = !term
@@ -250,7 +288,7 @@ export async function searchUsers(ctx: AppContext, q: string): Promise<AdminUser
   const rows = await ctx.db
     .select({ u: users, referredBy: referrerName })
     .from(users)
-    .where(where)
+    .where(and(where, userFilterSql(ctx, filter)))
     .orderBy(desc(users.createdAt))
     .limit(100)
   return rows.map((r) => toSummary(r.u, r.referredBy))
@@ -277,6 +315,32 @@ export async function userDetail(ctx: AppContext, id: string): Promise<AdminUser
     .from(referralEarnings)
     .where(eq(referralEarnings.referrerUserId, id))
   const u = row.u
+  const [streak] = await ctx.db
+    .select({
+      best: sql<number>`coalesce(max(${dailyCheckins.streak}), 0)::int`,
+      lastDay: sql<string | null>`max(${dailyCheckins.day})::text`,
+      lastStreak: sql<number | null>`(select c.streak from ${dailyCheckins} c where c.user_id = ${id} order by c.day desc limit 1)`,
+    })
+    .from(dailyCheckins)
+    .where(eq(dailyCheckins.userId, id))
+  const offers = await ctx.db
+    .select()
+    .from(comebackOffers)
+    .where(eq(comebackOffers.userId, id))
+    .orderBy(desc(comebackOffers.offeredAt))
+    .limit(10)
+  const messages = await ctx.db
+    .select()
+    .from(notifications)
+    .where(eq(notifications.userId, id))
+    .orderBy(desc(notifications.createdAt))
+    .limit(30)
+  const [delivery] = await ctx.db.select().from(deliveryPoints).where(eq(deliveryPoints.userId, id))
+  // The streak is current while its last claim was today or yesterday (Lagos days)
+  const today = lagosDay(ctx.now())
+  const yesterday = lagosDay(ctx.now() - 86_400_000)
+  const lastDay = streak?.lastDay ?? null
+  const current = lastDay === today || lastDay === yesterday ? (streak?.lastStreak ?? 0) : 0
   return {
     user: { ...toSummary(u, row.referredBy), referralCode: u.referralCode, tgUsername: u.tgUsername, createdAt: u.createdAt.toISOString() },
     ledgerBalance: sum?.n ?? 0,
@@ -306,7 +370,29 @@ export async function userDetail(ctx: AppContext, id: string): Promise<AdminUser
       revokedReason: s.revokedReason,
     })),
     referrals: { people: ref?.people ?? 0, raffsEarned: ref?.earned ?? 0 },
+    engagement: {
+      remindersOn: u.remindersOptOutAt === null,
+      nextReminderAt: u.nextReminderAt?.toISOString() ?? null,
+      remindersSinceLastOpen: u.remindersSinceOpen,
+      lastReminderAt: u.lastReminderAt?.toISOString() ?? null,
+      botBlockedAt: u.botBlockedAt?.toISOString() ?? null,
+      streak: { current, best: streak?.best ?? 0, lastClaimedDay: lastDay },
+      comebackOffers: offers.map((o) => ({
+        offeredAt: o.offeredAt.toISOString(),
+        expiresAt: o.expiresAt.toISOString(),
+        claimedAt: o.claimedAt?.toISOString() ?? null,
+        raffs: o.raffs,
+      })),
+    },
+    features: await userFeatures(ctx.db, id),
+    notifications: messages.map((n) => toAdminNotification(n, u.username)),
+    delivery: delivery ? { state: delivery.state, city: delivery.city, motorPark: delivery.motorPark } : null,
   }
+}
+
+/** YYYY-MM-DD of the Lagos calendar day (UTC+1, no daylight saving) containing `ms` */
+function lagosDay(ms: number): string {
+  return new Date(ms + 3_600_000).toISOString().slice(0, 10)
 }
 
 /**
@@ -430,6 +516,9 @@ export async function overview(ctx: AppContext): Promise<AdminOverview> {
       today: sql<number>`count(*) filter (where ${users.signedUpAt} >= ${dayStart})::int`,
       active7: sql<number>`count(*) filter (where ${users.lastSeenAt} >= ${new Date(now - 7 * 86_400_000)})::int`,
       outstanding: sql<number>`coalesce(sum(${users.balanceCache}), 0)::int`,
+      withPhone: sql<number>`count(${users.phone})::int`,
+      blocked: sql<number>`count(${users.botBlockedAt})::int`,
+      reachable: sql<number>`count(*) filter (where ${users.botBlockedAt} is null and ${users.status} = 'active')::int`,
     })
     .from(users)
   const [ledgerSum] = await ctx.db.select({ n: sql<number>`coalesce(sum(${ledger.raffs}), 0)::int` }).from(ledger)
@@ -459,6 +548,7 @@ export async function overview(ctx: AppContext): Promise<AdminOverview> {
   const nairaPerRaff = settingsNow.baseStarsPerRaff * settingsNow.nairaPerStar
   const raisedRaffs = (raisedRow?.spent ?? 0) - (raisedRow?.refunded ?? 0)
   const quote = await currentQuote(ctx.db, now)
+  const outbox = await outboxTotals(ctx.db, new Date(now - 86_400_000))
   const securityLast24h = { low: 0, medium: 0, high: 0, critical: 0 }
   for (const s of sev) securityLast24h[s.severity] = s.n
   return {
@@ -476,6 +566,8 @@ export async function overview(ctx: AppContext): Promise<AdminOverview> {
       movePct: Math.round(quote.moveMicro / 100) / 100,
       expiresAt: quote.expiresAt.toISOString(),
     },
+    phones: { withPhone: u?.withPhone ?? 0, withoutPhone: (u?.total ?? 0) - (u?.withPhone ?? 0) },
+    bot: { reachable: u?.reachable ?? 0, blocked: u?.blocked ?? 0, sentLast24h: outbox.sentLast24h, pending: outbox.pending },
   }
 }
 

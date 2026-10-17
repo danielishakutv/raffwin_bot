@@ -12,6 +12,7 @@ import { HttpError } from '../lib/http-error'
 import { post, type Tx } from '../services/ledger'
 import { putSetting } from '../services/settings'
 import { appendAudit } from './audit'
+import { announceRaffleCancelled } from './messages'
 import { can } from './permissions'
 
 const EXPIRY_HOURS = 72
@@ -80,7 +81,7 @@ export async function executeDirect<A extends Action>(
   let id: string
   try {
     id = await ctx.db.transaction(async (tx) => {
-      const result = await execute(tx, action, payload as never, adminId)
+      const result = await execute(tx, action, payload as never, adminId, new Date(ctx.now()))
       const [row] = await tx
         .insert(approvals)
         .values({
@@ -164,7 +165,7 @@ export async function decide(
       if (a.requestedByAdminId === deciderId) {
         throw new HttpError('FORBIDDEN', 'A second admin has to decide this; you asked for it.')
       }
-      const result = verdict === 'approve' ? await execute(tx, a.action, a.payload as never, deciderId) : null
+      const result = verdict === 'approve' ? await execute(tx, a.action, a.payload as never, deciderId, new Date(ctx.now())) : null
       await tx
         .update(approvals)
         .set({
@@ -196,7 +197,7 @@ export async function decide(
   return (await listApprovals(ctx, { id: approvalId }))[0] as AdminApproval
 }
 
-async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminId: string): Promise<Record<string, unknown>> {
+async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminId: string, at: Date): Promise<Record<string, unknown>> {
   switch (action) {
     case 'rate_base_change': {
       const p = payload as Payloads['rate_base_change']
@@ -219,7 +220,7 @@ async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminI
     }
     case 'raffle_cancel': {
       const p = payload as Payloads['raffle_cancel']
-      return cancelRaffle(tx, p.raffleId)
+      return cancelRaffle(tx, p.raffleId, adminId, at)
     }
   }
 }
@@ -227,8 +228,10 @@ async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminI
 /**
  * Cancels a raffle and refunds every entry in full. The referrer's 10% on
  * each refunded entry is reversed. Lock order: raffle, then users by id.
+ * In the same transaction, the bot is told to message every entrant that the
+ * raffle was cancelled and their Raffs refunded (and its new-raffle alert stops).
  */
-async function cancelRaffle(tx: Tx, raffleId: string): Promise<Record<string, unknown>> {
+async function cancelRaffle(tx: Tx, raffleId: string, adminId: string, at: Date): Promise<Record<string, unknown>> {
   const [raffle] = await tx.select().from(raffles).where(eq(raffles.id, raffleId)).for('update')
   if (!raffle) throw new Error('raffle no longer exists')
   if (raffle.status === 'drawn' || raffle.status === 'cancelled') throw new Error(`raffle is already ${raffle.status}`)
@@ -264,5 +267,7 @@ async function cancelRaffle(tx: Tx, raffleId: string): Promise<Record<string, un
     reversed += r.raffs
   }
   await tx.update(raffles).set({ status: 'cancelled', cancelledAt: sql`now()`, updatedAt: sql`now()` }).where(eq(raffles.id, raffleId))
-  return { entriesRefunded: list.length, raffsRefunded: refunded, referralRaffsReversed: reversed }
+  const entrants = [...new Set(list.map((e) => e.userId))]
+  const broadcastId = await announceRaffleCancelled(tx, raffle, entrants, adminId, at)
+  return { entriesRefunded: list.length, raffsRefunded: refunded, referralRaffsReversed: reversed, playersNotified: broadcastId ? entrants.length : 0 }
 }

@@ -16,6 +16,27 @@ const SETTINGS = {
   'limits.max_entries_per_user_per_raffle': z.number().int().min(1).nullable().default(null),
   /** Most Raffs one user may spend on entries per Lagos calendar day; null = no cap */
   'limits.daily_spend_raffs': z.number().int().min(1).nullable().default(null),
+
+  /* Engagement (admin > Messages). Hours are Lagos time. */
+  /** An inactivity reminder goes out a random 6..10 h after the last open, then again every 6..10 h */
+  'engagement.reminder_min_hours': z.number().int().min(1).max(72).default(6),
+  'engagement.reminder_max_hours': z.number().int().min(1).max(72).default(10),
+  /** Reminders per spell away; after that the bot stays quiet until the player opens the app again */
+  'engagement.max_reminders_per_spell': z.number().int().min(0).max(50).default(8),
+  /** No reminders or offers from quiet_start to quiet_end (Lagos); due ones wait for the morning */
+  'engagement.quiet_start_hour': z.number().int().min(0).max(23).default(22),
+  'engagement.quiet_end_hour': z.number().int().min(0).max(23).default(7),
+  /** Away this long and the bot offers a free Raff for coming back */
+  'engagement.comeback_after_hours': z.number().int().min(12).max(720).default(48),
+  /** "max 1 Raff" (owner, 17 Oct): 0 turns the offer's credit off */
+  'engagement.comeback_raffs': z.number().int().min(0).max(1).default(1),
+  /** At most one come-back offer per player in this many days */
+  'engagement.comeback_cooldown_days': z.number().int().min(1).max(90).default(7),
+  /** Daily streak bonus by day: day 1 = [0]; past the end the last value repeats */
+  'streak.rewards': z.array(z.number().int().min(0).max(1000)).min(1).max(30).default([1, 1, 2, 2, 3, 3, 5]),
+  /** Send Raffs: smallest transfer, and most Raffs one player may send per Lagos day */
+  'transfers.min_raffs': z.number().int().min(1).max(1_000_000).default(1),
+  'transfers.daily_max_raffs': z.number().int().min(1).max(10_000_000).default(1000),
 } as const
 
 export type SettingKey = keyof typeof SETTINGS
