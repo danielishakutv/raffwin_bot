@@ -13,6 +13,9 @@ importers:
       '@node-rs/argon2':
         specifier: 2.2.1
         version: 2.2.1
+      '@raffwin/relay':
+        specifier: workspace:*
+        version: link:../../packages/relay
       '@raffwin/shared':
         specifier: workspace:*
         version: link:../../packages/shared
