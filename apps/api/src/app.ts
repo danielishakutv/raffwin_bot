@@ -77,6 +77,8 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Express {
 
   app.use('/v1', limiter(ctx, limits.global, 'global'))
   app.use('/v1/auth', limiter(ctx, limits.auth, 'auth'))
+  // Guessing voucher codes: per address here, per player in services/vouchers.ts
+  app.use('/v1/vouchers', limiter(ctx, limits.auth, 'voucher'))
   app.use('/v1', v1Routes(ctx))
 
   app.use('/admin/v1', limiter(ctx, limits.global, 'admin'))

@@ -92,6 +92,9 @@ export const remindersBody = z.object({ on: z.boolean() })
 export const recipientQuery = z.object({ username: z.string().trim().min(1).max(41) })
 
 /** POST /v1/transfers (feature raffs_transfer) */
+/** Wallet > Redeem a code. Format and checks are the server's (services/vouchers.ts). */
+export const redeemVoucherBody = z.object({ code: z.string().trim().min(1, 'Type the code').max(40) })
+
 export const transferBody = z.object({
   /** Recipient's Raffle Win username, with or without @ */
   to: z.string().trim().min(1).max(41),

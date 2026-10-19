@@ -11,6 +11,7 @@ import { adminUsers, approvals, APPROVAL_ACTIONS, entries, raffles, referralEarn
 import { HttpError } from '../lib/http-error'
 import { post, type Tx } from '../services/ledger'
 import { stopDrawReminders } from '../services/draw-reminders'
+import { createBatch } from '../services/vouchers'
 import { enqueue, openAppButton } from '../services/notify'
 import { putSetting, type RateSettings, type SalesSettings } from '../services/settings'
 import { appendAudit } from './audit'
@@ -24,6 +25,7 @@ type Action = (typeof APPROVAL_ACTIONS)[number]
 export interface Payloads {
   rate_base_change: { rate: RateSettings; previous: RateSettings }
   sales_options_change: { sales: SalesSettings; previous: SalesSettings }
+  voucher_batch_create: { vendor: string; note: string; valueRaffs: number; count: number; expiresAt: string | null }
   balance_adjustment: { userId: string; username: string | null; raffs: number }
   raffle_cancel: { raffleId: string; prizeName: string; entriesCount: number }
   admin_risk_flag: { adminId: string; name: string }
@@ -41,6 +43,12 @@ export function summarise(action: Action, payload: Record<string, unknown>): str
     case 'sales_options_change': {
       const p = payload as unknown as Payloads['sales_options_change']
       return `Change sales options to ${salesText(p.sales)} (was ${salesText(p.previous)})`
+    }
+    case 'voucher_batch_create': {
+      const p = payload as unknown as Payloads['voucher_batch_create']
+      const total = (p.valueRaffs * p.count).toLocaleString('en-NG')
+      const until = p.expiresAt ? `, valid until ${p.expiresAt.slice(0, 10)}` : ''
+      return `${p.count.toLocaleString('en-NG')} voucher codes of ${p.valueRaffs.toLocaleString('en-NG')} Raffs for ${p.vendor} (${total} Raffs in all${until})`
     }
     case 'balance_adjustment': {
       const p = payload as unknown as Payloads['balance_adjustment']
@@ -207,7 +215,7 @@ export async function decide(
       if (a.requestedByAdminId === deciderId) {
         throw new HttpError('FORBIDDEN', 'A second admin has to decide this; you asked for it.')
       }
-      const result = verdict === 'approve' ? await execute(ctx, tx, a.action, a.payload as never, deciderId, new Date(ctx.now()), a.reason) : null
+      const result = verdict === 'approve' ? await execute(ctx, tx, a.action, a.payload as never, deciderId, new Date(ctx.now()), a.reason, { approvalId: a.id, requesterId: a.requestedByAdminId }) : null
       decided = { action: a.action, payload: a.payload as Record<string, unknown>, approved: verdict === 'approve' }
       await tx
         .update(approvals)
@@ -250,6 +258,8 @@ async function execute(
   adminId: string,
   at: Date,
   reason = '',
+  /** The approval being carried out (null when a super admin acts directly) and who asked for it */
+  origin: { approvalId: string | null; requesterId: string } = { approvalId: null, requesterId: adminId },
 ): Promise<Record<string, unknown>> {
   switch (action) {
     case 'rate_base_change': {
@@ -260,6 +270,11 @@ async function execute(
       await putSetting(tx, 'rate.move_max_pct', p.rate.moveMaxPct, adminId)
       // The new base applies from the next hourly quote; the current hour's quote stands
       return { appliesFrom: 'next hour' }
+    }
+    case 'voucher_batch_create': {
+      const p = payload as Payloads['voucher_batch_create']
+      const batchId = await createBatch(tx, { ...p, requestedByAdminId: origin.requesterId, approvalId: origin.approvalId })
+      return { batchId, next: 'Issue the codes from the Vouchers tab: they are shown once.' }
     }
     case 'sales_options_change': {
       const p = payload as Payloads['sales_options_change']

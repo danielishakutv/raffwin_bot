@@ -35,6 +35,9 @@ export const PERMISSIONS = [
   'messages.send',
   /** Reminder timing, come-back offer, streak rewards, transfer caps (super_admin) */
   'engagement.write',
+  /** Voucher batches: see them and look a code up; ask for a batch, hand out its codes, void */
+  'vouchers.read',
+  'vouchers.write',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -49,13 +52,14 @@ const READ: Permission[] = [
   'audit.read',
   'features.read',
   'messages.read',
+  'vouchers.read',
 ]
 
 const ROLE_PERMISSIONS: Record<AdminRole, ReadonlySet<Permission>> = {
   viewer: new Set(READ),
   support: new Set([...READ, 'users.suspend']),
   raffle_manager: new Set([...READ, 'raffles.write', 'raffles.cancel.request']),
-  finance: new Set([...READ, 'settings.rate.request', 'users.adjust.request', 'approvals.decide', 'finance.read', 'finance.write']),
+  finance: new Set([...READ, 'settings.rate.request', 'users.adjust.request', 'approvals.decide', 'finance.read', 'finance.write', 'vouchers.write']),
   super_admin: new Set(PERMISSIONS),
 }
 

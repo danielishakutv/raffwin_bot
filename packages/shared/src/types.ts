@@ -84,6 +84,8 @@ export type TransactionType =
   | 'transfer_in'
   /** Raffs you sent to another player */
   | 'transfer_out'
+  /** A voucher code you redeemed */
+  | 'voucher'
 
 export interface Transaction {
   id: string

@@ -276,7 +276,7 @@ export interface AdminEngagement {
 
 export interface AdminApproval {
   id: string
-  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel' | 'admin_risk_flag' | 'admin_risk_clear' | 'sales_options_change'
+  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel' | 'admin_risk_flag' | 'admin_risk_clear' | 'sales_options_change' | 'voucher_batch_create'
   /** One line a human can approve or reject from */
   summary: string
   payload: Record<string, unknown>
@@ -401,6 +401,36 @@ export interface AdminFinance {
   /** Raffs players hold right now: what Raffle Win owes in entries */
   outstandingRaffs: number
 }
+
+export interface AdminVoucherBatch {
+  id: string
+  vendor: string
+  note: string
+  valueRaffs: number
+  count: number
+  redeemed: number
+  voided: number
+  expiresAt: string | null
+  createdAt: string
+  /** When the codes were generated and handed over; null = approved, not yet issued */
+  codesIssuedAt: string | null
+  voidedAt: string | null
+  voidReason: string | null
+  status: 'ready' | 'issued' | 'expired' | 'void'
+}
+
+export type AdminVoucherLookup =
+  | { found: false }
+  | {
+      found: true
+      status: 'active' | 'redeemed' | 'void' | 'expired'
+      batchId: string
+      vendor: string
+      valueRaffs: number
+      expiresAt: string | null
+      redeemedAt: string | null
+      redeemedBy: { userId: string; username: string | null; telegramId: number | null } | null
+    }
 
 export interface AdminSettings {
   /** The base price and how far each hour may move from it */

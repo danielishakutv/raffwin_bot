@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BarChart3, ClipboardCheck, Cog, Gift, Lock, Megaphone, Monitor, ScrollText, ShieldAlert, ShieldCheck, ToggleRight, UserCog, Users, Wallet } from 'lucide-react'
+import { BarChart3, ClipboardCheck, Cog, Gift, Lock, Megaphone, Monitor, ScrollText, ShieldAlert, ShieldCheck, TicketCheck, ToggleRight, UserCog, Users, Wallet } from 'lucide-react'
 import { cn } from '@/components/ui/cn'
 import { env } from '@/services/env'
 import { isInsideTelegram } from '@/services/telegram'
@@ -26,14 +26,16 @@ import { MessagesTab } from './tabs/MessagesTab'
 import { OverviewTab } from './tabs/OverviewTab'
 import { PlayersTab } from './tabs/PlayersTab'
 import { SettingsTab } from './tabs/SettingsTab'
+import { VouchersTab } from './tabs/VouchersTab'
 import { AskDialog, Button, Err } from './ui'
 import { WebSignIn } from './WebSignIn'
 
-type Tab = 'overview' | 'raffles' | 'finance' | 'approvals' | 'players' | 'messages' | 'features' | 'settings' | 'security' | 'audit' | 'admins'
+type Tab = 'overview' | 'raffles' | 'finance' | 'vouchers' | 'approvals' | 'players' | 'messages' | 'features' | 'settings' | 'security' | 'audit' | 'admins'
 const TABS: { id: Tab; label: string; icon: ReactNode; perm?: string }[] = [
   { id: 'overview', label: 'Overview', icon: <BarChart3 size={16} /> },
   { id: 'raffles', label: 'Raffles', icon: <Gift size={16} /> },
   { id: 'finance', label: 'Finance', icon: <Wallet size={16} />, perm: 'finance.read' },
+  { id: 'vouchers', label: 'Vouchers', icon: <TicketCheck size={16} />, perm: 'vouchers.read' },
   { id: 'approvals', label: 'Approvals', icon: <ClipboardCheck size={16} /> },
   { id: 'players', label: 'Players', icon: <Users size={16} /> },
   { id: 'messages', label: 'Messages', icon: <Megaphone size={16} />, perm: 'messages.read' },
@@ -256,6 +258,7 @@ export function AdminScreen() {
           {active === 'overview' && <OverviewTab />}
           {active === 'raffles' && <RafflesTab can={me.permissions} superAdmin={superAdmin} onScrollTop={scrollTop} />}
           {active === 'finance' && <FinanceTab can={me.permissions} />}
+          {active === 'vouchers' && <VouchersTab can={me.permissions} superAdmin={superAdmin} />}
           {active === 'approvals' && <ApprovalsTab can={me.permissions} />}
           {active === 'players' && <PlayersTab can={me.permissions} superAdmin={superAdmin} />}
           {active === 'messages' && <MessagesTab can={me.permissions} />}

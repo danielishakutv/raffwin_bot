@@ -108,6 +108,18 @@ export const salesOptionsBody = reasonBody
     path: ['packages'],
   })
 
+export const voucherBatchBody = reasonBody.extend({
+  vendor: z.string().trim().min(2, 'Who sells them?').max(80),
+  note: z.string().trim().max(200).default(''),
+  /** Raffs each code adds */
+  valueRaffs: z.number().int().min(1).max(100_000),
+  count: z.number().int().min(1).max(5000),
+  /** Optional; codes stop working at this moment */
+  expiresAt: z.string().datetime().nullable(),
+})
+
+export const voucherCodeBody = z.object({ code: z.string().trim().min(1).max(40) })
+
 export const limitsBody = z.object({
   maxEntriesPerUserPerRaffle: z.number().int().min(1).nullable(),
   dailySpendRaffs: z.number().int().min(1).nullable(),

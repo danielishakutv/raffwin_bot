@@ -12,6 +12,7 @@ import {
   kycBody,
   phoneBody,
   recipientQuery,
+  redeemVoucherBody,
   refreshBody,
   remindersBody,
   telegramAuthBody,
@@ -32,6 +33,7 @@ import { currentQuote, toRateQuote } from '../services/rates'
 import * as referrals from '../services/referrals'
 import * as streak from '../services/streak'
 import * as transfers from '../services/transfers'
+import { redeemVoucher } from '../services/vouchers'
 import { masterPrompt, startAdminSignIn } from '../bot/admin-login'
 import { authOf, requestMeta, requireAuth } from './middleware'
 
@@ -177,6 +179,13 @@ export function v1Routes(ctx: AppContext): Router {
 
   router.post('/transfers', authed, async (req, res) => {
     res.status(201).json(await transfers.sendRaffs(ctx, me(req), transferBody.parse(req.body)))
+  })
+
+  /* Vouchers ------------------------------------------------------------ */
+
+  router.post('/vouchers/redeem', authed, async (req, res) => {
+    const { code } = redeemVoucherBody.parse(req.body)
+    res.json(await redeemVoucher(ctx, me(req).id, code, requestMeta(ctx, req)))
   })
 
   /* Admin sign-in from the app ------------------------------------------ */

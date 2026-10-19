@@ -43,6 +43,13 @@ export const FEATURES = {
     audience: 'player',
     announce: 'New on Raffle Win: daily streaks. Open the app every day to claim free Raffs, and keep your streak going for bigger rewards.',
   },
+  vouchers: {
+    name: 'Redeem codes',
+    description: 'Players type a voucher code bought from a vendor to add its Raffs to their balance (Vouchers tab). Wrong codes are limited per player and per address.',
+    defaultEnabled: true,
+    audience: 'player',
+    announce: null,
+  },
   reminders: {
     name: 'Bot reminders',
     description: 'The bot reminds players who have not opened the app for 6 to 10 hours (randomised), with a different message each time. Never during quiet hours.',

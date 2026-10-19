@@ -20,6 +20,8 @@ import {
   rateBaseBody,
   reasonBody,
   salesOptionsBody,
+  voucherBatchBody,
+  voucherCodeBody,
 } from '@raffwin/shared/admin-schemas'
 import { cursorQuery } from '@raffwin/shared/schemas'
 import type { AdminMe } from '@raffwin/shared/admin-types'
@@ -29,6 +31,7 @@ import { NOTIFICATION_KINDS, raffles, users } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { requestMeta } from '../http/middleware'
 import { rateSettings, salesSettings } from '../services/settings'
+import * as vouchers from '../services/vouchers'
 import { decide, executeDirect, listApprovals, requestApproval } from './approvals'
 import { verifyChain } from './audit'
 import * as ops from './operations'
@@ -266,6 +269,31 @@ export function adminRoutes(ctx: AppContext): Router {
     const body = salesOptionsBody.parse(req.body)
     const sales = { packages: body.packages, minNaira: body.minNaira, maxNaira: body.maxNaira }
     await askOrRun(req, res, 'sales_options_change', { sales, previous: await salesSettings(ctx.db) }, body.reason)
+  })
+
+  /* Vouchers --------------------------------------------------------------- */
+  // Codes travel in POST bodies only: the audit log records routes and params, never bodies
+
+  r.get('/vouchers/batches', authed, perm('vouchers.read'), async (_req, res) => {
+    res.json(await vouchers.listBatches(ctx))
+  })
+  r.post('/vouchers/batches', authed, perm('vouchers.write'), async (req, res) => {
+    const { reason, ...batch } = voucherBatchBody.parse(req.body)
+    if (batch.expiresAt && Date.parse(batch.expiresAt) <= ctx.now()) throw new HttpError('INVALID_INPUT', 'The expiry is in the past.')
+    await askOrRun(req, res, 'voucher_batch_create', batch, reason)
+  })
+  r.post('/vouchers/batches/:id/issue', authed, perm('vouchers.write'), async (req, res) => {
+    res.json(await vouchers.issueCodes(ctx, idParam(req), adminId(req)))
+  })
+  r.post('/vouchers/batches/:id/void', authed, perm('vouchers.write'), async (req, res) => {
+    const { reason } = reasonBody.parse(req.body)
+    res.json(await vouchers.voidBatch(ctx, idParam(req), adminId(req), reason))
+  })
+  r.post('/vouchers/lookup', authed, perm('vouchers.read'), async (req, res) => {
+    res.json(await vouchers.lookupCode(ctx, voucherCodeBody.parse(req.body).code))
+  })
+  r.post('/vouchers/void-code', authed, perm('vouchers.write'), async (req, res) => {
+    res.json(await vouchers.voidCode(ctx, voucherCodeBody.parse(req.body).code, adminId(req)))
   })
 
   /* Features --------------------------------------------------------------- */

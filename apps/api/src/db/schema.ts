@@ -364,6 +364,8 @@ export const LEDGER_TYPES = [
   'transfer_in',
   /** Raffs sent to another player */
   'transfer_out',
+  /** A voucher code redeemed in the Mini App (vouchers) */
+  'voucher',
 ] as const
 
 /**
@@ -426,6 +428,58 @@ export const purchases = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('purchases_reference_key').on(t.reference), index('purchases_user_idx').on(t.userId, t.createdAt), index('purchases_created_idx').on(t.createdAt)],
+)
+
+/**
+ * Vouchers sold offline by vendors. An admin asks for a batch (vendor, value,
+ * how many) and a second admin approves it; the codes are then generated and
+ * handed over once (services/vouchers.ts). Only a SHA-256 of each code is
+ * stored: 16 random characters from a 32-letter alphabet are 80 bits, beyond
+ * guessing, and a stolen table cannot be turned back into codes.
+ */
+export const voucherBatches = pgTable(
+  'voucher_batches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    vendor: text('vendor').notNull(),
+    note: text('note').notNull().default(''),
+    valueRaffs: integer('value_raffs').notNull(),
+    codeCount: integer('code_count').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    approvalId: uuid('approval_id').references(() => approvals.id),
+    requestedByAdminId: uuid('requested_by_admin_id')
+      .notNull()
+      .references(() => adminUsers.id),
+    /** Set once, when the codes were generated and handed to an admin; never again */
+    codesIssuedAt: timestamp('codes_issued_at', { withTimezone: true }),
+    codesIssuedByAdminId: uuid('codes_issued_by_admin_id').references(() => adminUsers.id),
+    voidedAt: timestamp('voided_at', { withTimezone: true }),
+    voidedByAdminId: uuid('voided_by_admin_id').references(() => adminUsers.id),
+    voidReason: text('void_reason'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('voucher_batches_created_idx').on(t.createdAt)],
+)
+
+export const vouchers = pgTable(
+  'vouchers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    batchId: uuid('batch_id')
+      .notNull()
+      .references(() => voucherBatches.id),
+    codeHash: text('code_hash').notNull(),
+    /** The last 4 characters, so support can talk about a code without holding it */
+    codeTail: text('code_tail').notNull(),
+    status: text('status', { enum: ['active', 'redeemed', 'void'] }).notNull().default('active'),
+    redeemedByUserId: uuid('redeemed_by_user_id').references(() => users.id),
+    redeemedAt: timestamp('redeemed_at', { withTimezone: true }),
+    ledgerId: uuid('ledger_id').references(() => ledger.id),
+    voidedAt: timestamp('voided_at', { withTimezone: true }),
+    voidedByAdminId: uuid('voided_by_admin_id').references(() => adminUsers.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('vouchers_code_hash_key').on(t.codeHash), index('vouchers_batch_idx').on(t.batchId, t.status), index('vouchers_redeemed_by_idx').on(t.redeemedByUserId)],
 )
 
 export const referralEarnings = pgTable(
@@ -594,7 +648,7 @@ export const auditLog = pgTable(
   (t) => [uniqueIndex('audit_log_seq_key').on(t.seq), index('audit_log_target_idx').on(t.targetType, t.targetId)],
 )
 
-export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel', 'admin_risk_flag', 'admin_risk_clear', 'sales_options_change'] as const
+export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel', 'admin_risk_flag', 'admin_risk_clear', 'sales_options_change', 'voucher_batch_create'] as const
 
 /** Maker-checker: a sensitive action runs only when a second admin approves it. */
 export const approvals = pgTable(
@@ -976,6 +1030,8 @@ export type RaffleRow = typeof raffles.$inferSelect
 export type RafflePrizeRow = typeof rafflePrizes.$inferSelect
 export type EntryRow = typeof entries.$inferSelect
 export type LedgerRow = typeof ledger.$inferSelect
+export type VoucherBatchRow = typeof voucherBatches.$inferSelect
+export type VoucherRow = typeof vouchers.$inferSelect
 export type PurchaseRow = typeof purchases.$inferSelect
 export type AdminUserRow = typeof adminUsers.$inferSelect
 export type AdminDeviceRow = typeof adminDevices.$inferSelect

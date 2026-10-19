@@ -1,4 +1,4 @@
-import { ArrowDownLeft, Gift, HandCoins, Send, SlidersHorizontal, Ticket, Trophy, Undo2, UserPlus } from 'lucide-react'
+import { ArrowDownLeft, Gift, HandCoins, Send, SlidersHorizontal, Ticket, TicketCheck, Trophy, Undo2, UserPlus } from 'lucide-react'
 import type { ElementType } from 'react'
 import type { TransactionType } from '@/data/types'
 
@@ -14,6 +14,7 @@ export const TRANSACTION_ICONS: Record<TransactionType, ElementType> = {
   adjustment: SlidersHorizontal,
   transfer_in: HandCoins,
   transfer_out: Send,
+  voucher: TicketCheck,
 }
 
 /**
