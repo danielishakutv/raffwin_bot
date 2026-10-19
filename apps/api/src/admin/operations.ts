@@ -37,6 +37,7 @@ import {
 } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { newDrawSeed } from '../services/draw'
+import { stopDrawReminders } from '../services/draw-reminders'
 import { currentQuote } from '../services/rates'
 import { getAllSettings, putSetting } from '../services/settings'
 import { appendAudit } from './audit'
@@ -262,6 +263,7 @@ export async function unpublishRaffle(ctx: AppContext, adminId: string, id: stri
     await tx.update(raffles).set({ status: 'draft', updatedAt: sql`now()` }).where(eq(raffles.id, id))
     // Players are not alerted about a raffle they can no longer see
     const alertsStopped = await cancelBroadcastsFor(tx, { type: 'raffle', id }, ['raffle_new'], new Date(ctx.now()))
+    await stopDrawReminders(tx, id, new Date(ctx.now()))
     await appendAudit(tx, { adminId, action: 'raffle.unpublish', targetType: 'raffle', targetId: id, before: { status: 'open' }, after: { status: 'draft', reason, alertsStopped } })
   })
   return getRaffle(ctx, id)

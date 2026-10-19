@@ -247,6 +247,7 @@ const KIND_LABEL: Record<AdminBroadcast['kind'], string> = {
   raffle_new: 'New raffle',
   raffle_cancelled: 'Raffle cancelled',
   raffle_drawn: 'Winners announced',
+  raffle_soon: 'Last chance before a draw',
 }
 
 const STATUS_LABEL: Record<AdminBroadcast['status'], string> = {
@@ -340,6 +341,7 @@ const KINDS: { value: '' | NotificationKind; label: string }[] = [
   { value: 'raffle_cancelled', label: 'Cancelled raffles' },
   { value: 'raffle_drawn', label: 'Winners announced' },
   { value: 'raffle_won', label: 'Winner messages' },
+  { value: 'raffle_soon', label: 'Draw reminders' },
   { value: 'transfer', label: 'Raffs received' },
   { value: 'credit', label: 'Admin credits' },
   { value: 'system', label: 'System' },

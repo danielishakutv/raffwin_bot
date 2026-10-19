@@ -4,8 +4,9 @@
  *   sender     every 1.5 s  the outbox -> Telegram (notify.sendPendingOnce)
  *   scheduler  every 60 s   broadcast fan-out, then reminders and come-back
  *                           offers (engagement.runEngagementOnce)
- *   draws      every 5 s    seeds for open raffles, then every raffle past its
- *                           deadline drawn or, under 5 entries, refunded (draw.ts)
+ *   draws      every 5 s    seeds for open raffles, reminders 1 h / 30 min / 5 min
+ *                           before a draw (draw-reminders.ts), then every raffle past
+ *                           its deadline drawn or, under 5 entries, refunded (draw.ts)
  *
  * PM2 may run several API processes, and every one starts these loops. Each
  * tick first takes a Postgres advisory lock (held by a transaction for the
@@ -16,6 +17,7 @@
 import { sql } from 'drizzle-orm'
 import type { AppContext } from '../context'
 import { ensureSeedCommitments, runDrawsOnce } from './draw'
+import { runDrawRemindersOnce } from './draw-reminders'
 import { runEngagementOnce } from './engagement'
 import { fanOutOnce, sendPendingOnce } from './notify'
 
@@ -107,6 +109,13 @@ export function startWorkers(ctx: AppContext): () => Promise<void> {
   const draws = startLoop(ctx, 'draws', DRAWS_LOCK_KEY, DRAWS_INTERVAL_MS, async () => {
     const seeded = await ensureSeedCommitments(ctx)
     if (seeded) ctx.log.info({ worker: 'draws', seeded }, 'draw seeds committed for open raffles')
+    // A failed reminder pass is logged and must not hold up a draw
+    try {
+      const reminded = await runDrawRemindersOnce(ctx)
+      if (reminded.raffles) ctx.log.info({ worker: 'draws', ...reminded }, 'draw reminders queued')
+    } catch (error) {
+      ctx.log.error({ err: error, worker: 'draws', step: 'reminders' }, 'draw reminders failed')
+    }
     const pass = await runDrawsOnce(ctx)
     if (pass.drawn || pass.cancelled || pass.failed) ctx.log.info({ worker: 'draws', ...pass }, 'draw pass')
   })

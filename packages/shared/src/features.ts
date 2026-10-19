@@ -64,6 +64,14 @@ export const FEATURES = {
     audience: 'automation',
     announce: null,
   },
+  draw_reminders: {
+    name: 'Draw reminders',
+    description:
+      'The bot messages 1 hour, 30 minutes and 5 minutes before each draw: entrants hear how many tickets they hold; everyone else with new raffle alerts on gets a last chance to enter (never in quiet hours).',
+    defaultEnabled: true,
+    audience: 'automation',
+    announce: null,
+  },
   require_phone_for_entry: {
     name: 'Phone needed to enter',
     description: 'Players must share their phone number through Telegram before entering a raffle, so winners can always be reached.',

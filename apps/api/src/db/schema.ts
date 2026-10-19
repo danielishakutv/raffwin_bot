@@ -671,7 +671,7 @@ export const featureFlagOverrides = pgTable(
   ],
 )
 
-export const BROADCAST_KINDS = ['announcement', 'feature', 'raffle_new', 'raffle_cancelled', 'raffle_drawn'] as const
+export const BROADCAST_KINDS = ['announcement', 'feature', 'raffle_new', 'raffle_cancelled', 'raffle_drawn', 'raffle_soon'] as const
 
 /**
  * One message to many players. Created by an admin (notice, announcement), by
@@ -715,6 +715,8 @@ export const NOTIFICATION_KINDS = [
   'raffle_drawn',
   /** A winner's own message */
   'raffle_won',
+  /** Before a draw (1 h, 30 min, 5 min): to entrants with their tickets, and "last chance" to everyone else */
+  'raffle_soon',
   /** Raffs credited by an admin (an approved or direct balance adjustment) */
   'credit',
   'transfer',
@@ -884,6 +886,29 @@ export const adminDevices = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('admin_devices_secret_key').on(t.secretHash), index('admin_devices_admin_idx').on(t.adminId, t.createdAt)],
+)
+
+/**
+ * Draw reminders already sent: one row per raffle, stage (minutes before the
+ * draw: 60, 30, 5) and deadline, so each goes out once, and moving a deadline
+ * arms them again. Written in the transaction that queues the messages.
+ */
+export const raffleReminders = pgTable(
+  'raffle_reminders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    raffleId: uuid('raffle_id')
+      .notNull()
+      .references(() => raffles.id),
+    stage: integer('stage').notNull(),
+    deadline: timestamp('deadline', { withTimezone: true }).notNull(),
+    /** Entrants messaged directly; null for a stage passed over (a closer one was sent instead) */
+    entrantsTold: integer('entrants_told'),
+    /** The "last chance" broadcast to everyone else, if one went out */
+    broadcastId: uuid('broadcast_id').references(() => broadcasts.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('raffle_reminders_once_key').on(t.raffleId, t.stage, t.deadline)],
 )
 
 export const adminWebLogins = pgTable(

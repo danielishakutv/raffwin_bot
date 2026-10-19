@@ -208,6 +208,7 @@ export type NotificationKind =
   | 'raffle_cancelled'
   | 'raffle_drawn'
   | 'raffle_won'
+  | 'raffle_soon'
   | 'credit'
   | 'transfer'
   | 'system'
@@ -229,7 +230,7 @@ export interface AdminNotification {
 
 export interface AdminBroadcast {
   id: string
-  kind: 'announcement' | 'feature' | 'raffle_new' | 'raffle_cancelled' | 'raffle_drawn'
+  kind: 'announcement' | 'feature' | 'raffle_new' | 'raffle_cancelled' | 'raffle_drawn' | 'raffle_soon'
   title: string
   text: string
   openButton: boolean

@@ -26,6 +26,7 @@ import { appendAudit } from '../admin/audit'
 import { cancelRaffle } from '../admin/approvals'
 import { escapeHtml } from '../lib/html'
 import { sha256Hex } from '../lib/crypto'
+import { stopDrawReminders } from './draw-reminders'
 import { post, type Tx } from './ledger'
 import { createBroadcast, enqueue, openAppButton } from './notify'
 
@@ -195,6 +196,7 @@ async function drawWinners(ctx: AppContext, tx: Tx, raffle: RaffleRow, prizes: P
     results.push({ position: prize.position, prizeItem: prize.prizeItem, ticket, userId: person.id, name: publicName(person), raffs: credit })
   }
 
+  await stopDrawReminders(tx, raffle.id, at)
   await tx
     .update(raffles)
     .set({ status: 'drawn', drawnAt: at, drawSeed: seed, seedCommitment: commitment, updatedAt: sql`now()` })

@@ -135,6 +135,7 @@ const BROADCAST_NOTIFICATION_KIND: Record<BroadcastKind, NotificationKind> = {
   raffle_new: 'raffle_new',
   raffle_cancelled: 'raffle_cancelled',
   raffle_drawn: 'raffle_drawn',
+  raffle_soon: 'raffle_soon',
 }
 
 /** Who a broadcast reaches, as SQL over users. Blocked and suspended players never are. */
@@ -162,6 +163,13 @@ function audienceWhere(ctx: AppContext, b: BroadcastRow): SQL {
   }
   // Players can switch new-raffle alerts off (or an admin for them); announcements always go
   if (b.kind === 'raffle_new') parts.push(sql`${featureSql('new_raffle_alerts')} = true`)
+  // Last chance before a draw: players not in it, with new raffle alerts and reminders on (entrants get their own message)
+  if (b.kind === 'raffle_soon') {
+    parts.push(
+      sql`${featureSql('draw_reminders')} = true and ${featureSql('new_raffle_alerts')} = true and ${users.remindersOptOutAt} is null
+          and not exists (select 1 from ${entries} e where e.user_id = ${users.id} and e.raffle_id::text = ${b.refId})`,
+    )
+  }
   // Winners announced: the raffle's own entrants always hear, everyone else as with new raffles
   if (b.kind === 'raffle_drawn') {
     parts.push(

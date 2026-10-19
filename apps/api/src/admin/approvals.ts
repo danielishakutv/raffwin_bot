@@ -10,6 +10,7 @@ import type { AppContext } from '../context'
 import { adminUsers, approvals, APPROVAL_ACTIONS, entries, raffles, referralEarnings, users } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { post, type Tx } from '../services/ledger'
+import { stopDrawReminders } from '../services/draw-reminders'
 import { enqueue, openAppButton } from '../services/notify'
 import { putSetting } from '../services/settings'
 import { appendAudit } from './audit'
@@ -333,6 +334,7 @@ export async function cancelRaffle(
     reversed += r.raffs
   }
   await tx.update(raffles).set({ status: 'cancelled', cancelledAt: sql`now()`, updatedAt: sql`now()` }).where(eq(raffles.id, raffleId))
+  await stopDrawReminders(tx, raffleId, at)
   const entrants = [...new Set(list.map((e) => e.userId))]
   const broadcastId = await announceRaffleCancelled(tx, raffle, entrants, adminId, at, notReached)
   return { entriesRefunded: list.length, raffsRefunded: refunded, referralRaffsReversed: reversed, playersNotified: broadcastId ? entrants.length : 0 }
