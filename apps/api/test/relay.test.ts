@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { signRelay, type CreditRequest, type RelayOperation } from '@raffwin/relay'
-import { ledger, notifications, purchases, securityEvents, users } from '../src/db/schema'
+import { adminUsers, ledger, notifications, purchases, securityEvents, users } from '../src/db/schema'
 import { member as open } from './fixtures'
 import { telegramId, testApp } from './helpers'
 
@@ -179,6 +179,37 @@ describe('relay credits', () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200)
     expect(res.body.raffs).toBe(c.baseRaffs)
     clock.advance(-90 * 60)
+  })
+})
+
+describe('relay flags', () => {
+  it('records a flagged payment once and tells the super and finance admins', async () => {
+    const sent: [number, string][] = []
+    ctx.sendTelegram = async (chatId, text) => {
+      sent.push([chatId, text])
+    }
+    const tg = telegramId()
+    await db.insert(adminUsers).values([
+      { name: 'Boss', username: `boss_${tg}`, telegramUsername: `boss${tg}`, telegramId: tg, role: 'super_admin', passwordHash: 'x' },
+      { name: 'Viewer', username: `view_${tg}`, telegramUsername: `view${tg}`, telegramId: tg + 1, role: 'viewer', passwordHash: 'x' },
+    ])
+    const flag = { reference: `ps_flag_${tg}`, kind: 'late_payment', telegramId: 42, nairaKobo: 250_000, detail: 'Paid 3 h after the quote' }
+    const res = await relay('flag', flag)
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(res.body).toEqual({ recorded: true })
+    expect((await relay('flag', flag)).body).toEqual({ recorded: false })
+    const ev = (await events('sales_late_payment')).filter((e) => (e.details as { reference?: string }).reference === flag.reference)
+    expect(ev).toHaveLength(1)
+    const toBoss = sent.filter(([id]) => id === tg)
+    expect(toBoss).toHaveLength(1)
+    expect(toBoss[0]![1]).toContain('Paid after the quote ran out')
+    expect(toBoss[0]![1]).toContain('₦2,500')
+    expect(sent.some(([id]) => id === tg + 1)).toBe(false)
+    ctx.sendTelegram = undefined
+  })
+
+  it('refuses an unknown kind', async () => {
+    expect((await relay('flag', { reference: 'ps_abcdef', kind: 'whatever', telegramId: null, nairaKobo: null, detail: '' })).status).toBe(400)
   })
 })
 

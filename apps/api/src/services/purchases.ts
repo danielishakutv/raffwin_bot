@@ -18,7 +18,7 @@
  * reference with different figures is refused as a conflict.
  */
 import { randomUUID } from 'node:crypto'
-import { eq } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 import {
   bonusRaffs,
   MAX_BONUS_PERCENT,
@@ -26,11 +26,14 @@ import {
   type AccountResponse,
   type CreditRequest,
   type CreditResponse,
+  type FlagKind,
+  type FlagRequest,
   type RelayRefusal,
 } from '@raffwin/relay'
 import type { AppContext } from '../context'
 import { uniqueViolation } from '../db/client'
-import { purchases, rateQuotes, users, type PurchaseRow } from '../db/schema'
+import { adminUsers, purchases, rateQuotes, securityEvents, users, type PurchaseRow } from '../db/schema'
+import { recordSecurityEvent } from '../lib/security-events'
 import { escapeHtml } from '../lib/html'
 import { post } from './ledger'
 import { enqueue, openAppButton } from './notify'
@@ -50,6 +53,66 @@ export async function accountFor(ctx: AppContext, telegramId: number): Promise<A
   const [user] = await ctx.db.select({ status: users.status, balance: users.balanceCache }).from(users).where(eq(users.telegramId, telegramId))
   if (!user) return { exists: false, rate, sales }
   return { exists: true, status: user.status === 'active' ? 'active' : 'suspended', balance: user.balance, rate, sales }
+}
+
+const FLAG_TEXT: Record<FlagKind, string> = {
+  late_payment: 'Paid after the quote ran out, so it was not credited',
+  amount_mismatch: 'Paystack and the quote disagree on the amount',
+  credit_refused: 'This API refused the credit',
+  credit_stuck: 'The credit has not been delivered for a day',
+  unmatched: 'A Paystack payment with no matching quote',
+  refund: 'Refunded in Paystack',
+  dispute: 'Disputed (chargeback) in Paystack',
+}
+
+/**
+ * The sales site found a payment it will not settle itself. Recorded once per
+ * reference and kind (Security tab, kind sales_<kind>), and the super and
+ * finance admins get a bot message. Settled by hand: a refund in Paystack,
+ * or a balance adjustment here.
+ */
+export async function flagPayment(ctx: AppContext, f: FlagRequest): Promise<{ recorded: boolean }> {
+  const kind = `sales_${f.kind}`
+  const [seen] = await ctx.db
+    .select({ id: securityEvents.id })
+    .from(securityEvents)
+    .where(and(eq(securityEvents.kind, kind), sql`${securityEvents.details}->>'reference' = ${f.reference}`))
+    .limit(1)
+  if (seen) return { recorded: false }
+  await recordSecurityEvent(ctx.db, ctx.log, {
+    severity: 'high',
+    category: 'relay',
+    kind,
+    ipHash: null,
+    route: 'relay flag',
+    details: { reference: f.reference, telegramId: f.telegramId, nairaKobo: f.nairaKobo, detail: f.detail },
+    actionTaken: 'none',
+  })
+
+  if (ctx.sendTelegram) {
+    const naira = f.nairaKobo !== null ? ` ₦${(f.nairaKobo / 100).toLocaleString('en-NG', { maximumFractionDigits: 2 })}` : ''
+    const text = [
+      `Sales site: a payment needs attention`,
+      '',
+      `${FLAG_TEXT[f.kind]}.${naira}`,
+      `Reference ${f.reference}${f.telegramId ? `, Telegram id ${f.telegramId}` : ''}.`,
+      f.detail,
+      '',
+      'Check it in Paystack, then refund it there or credit the player with an admin credit.',
+    ].join('\n')
+    const admins = await ctx.db
+      .select({ telegramId: adminUsers.telegramId })
+      .from(adminUsers)
+      .where(and(eq(adminUsers.status, 'active'), inArray(adminUsers.role, ['super_admin', 'finance']), isNotNull(adminUsers.telegramId)))
+    for (const a of admins) {
+      try {
+        await ctx.sendTelegram(a.telegramId as number, text)
+      } catch (error) {
+        ctx.log.warn({ err: error, reference: f.reference }, 'could not tell an admin about a flagged payment')
+      }
+    }
+  }
+  return { recorded: true }
 }
 
 export type CreditOutcome = { ok: true; response: CreditResponse } | { ok: false; refusal: RelayRefusal; message: string }

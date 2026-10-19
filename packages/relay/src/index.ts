@@ -4,6 +4,8 @@
  *
  *   account   is there a player for this Telegram id; their balance and the rate now
  *   credit    a confirmed payment: credit its Raffs once (idempotent on the reference)
+ *   flag      a payment the sales site will not credit by itself (late, mismatched,
+ *             refused, refunded, disputed, unmatched): the admins are told
  *
  * Signature (headers x-relay-timestamp, x-relay-signature):
  *
@@ -24,7 +26,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 
-export const RELAY_OPERATIONS = ['account', 'credit'] as const
+export const RELAY_OPERATIONS = ['account', 'credit', 'flag'] as const
 export type RelayOperation = (typeof RELAY_OPERATIONS)[number]
 
 export const TIMESTAMP_HEADER = 'x-relay-timestamp'
@@ -163,6 +165,36 @@ export const creditResponse = z.object({
   balance: z.number().int(),
 })
 export type CreditResponse = z.infer<typeof creditResponse>
+
+/** Why a payment needs a person: what the sales site found and could not settle itself */
+export const FLAG_KINDS = [
+  /** Paid after the quote's window: not credited automatically */
+  'late_payment',
+  /** Paystack's verified amount, currency or metadata differ from the quote */
+  'amount_mismatch',
+  /** The main API refused the credit (no account, suspended, out of bounds, conflict) */
+  'credit_refused',
+  /** Undelivered for a day: the main API kept failing */
+  'credit_stuck',
+  /** A successful Paystack payment with no quote here (reconciliation) */
+  'unmatched',
+  'refund',
+  'dispute',
+] as const
+export type FlagKind = (typeof FLAG_KINDS)[number]
+
+export const flagRequest = z
+  .object({
+    reference: z.string().min(6).max(100).regex(/^[A-Za-z0-9_.=-]+$/),
+    kind: z.enum(FLAG_KINDS),
+    telegramId: telegramId.nullable(),
+    nairaKobo: z.number().int().min(0).nullable(),
+    /** One line for the admin, written by the sales site */
+    detail: z.string().max(500),
+  })
+  .strict()
+export type FlagRequest = z.infer<typeof flagRequest>
+export const flagResponse = z.object({ recorded: z.boolean() })
 
 /**
  * Refusals. The sender must not retry these: the same request gets the same

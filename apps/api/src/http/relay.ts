@@ -14,6 +14,7 @@ import express, { type Express, type Request, type RequestHandler, type Response
 import {
   accountRequest,
   creditRequest,
+  flagRequest,
   RELAY_OPERATIONS,
   RELAY_REFUSALS,
   SIGNATURE_HEADER,
@@ -24,7 +25,7 @@ import {
 } from '@raffwin/relay'
 import type { AppContext } from '../context'
 import { recordSecurityEvent } from '../lib/security-events'
-import { accountFor, creditPurchase } from '../services/purchases'
+import { accountFor, creditPurchase, flagPayment } from '../services/purchases'
 import { requestMeta } from './middleware'
 
 export const RELAY_MOUNT = '/internal'
@@ -96,6 +97,13 @@ export function mountRelay(ctx: AppContext, app: Express, limiter: RequestHandle
       const parsed = accountRequest.safeParse(json)
       if (!parsed.success) return fail(res, 400, 'invalid', parsed.error.issues[0]?.message ?? 'Invalid request')
       res.json(await accountFor(ctx, parsed.data.telegramId))
+      return
+    }
+
+    if (operation === 'flag') {
+      const parsed = flagRequest.safeParse(json)
+      if (!parsed.success) return fail(res, 400, 'invalid', parsed.error.issues[0]?.message ?? 'Invalid request')
+      res.json(await flagPayment(ctx, parsed.data))
       return
     }
 
