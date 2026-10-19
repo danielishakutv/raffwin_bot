@@ -39,7 +39,7 @@ import { HttpError } from '../lib/http-error'
 import { newDrawSeed } from '../services/draw'
 import { stopDrawReminders } from '../services/draw-reminders'
 import { currentQuote } from '../services/rates'
-import { getAllSettings, putSetting } from '../services/settings'
+import { getAllSettings, putSetting, type SalesSettings } from '../services/settings'
 import { appendAudit } from './audit'
 import { recordSecurityEvent } from '../lib/security-events'
 import { userFeatures } from './features-admin'
@@ -552,8 +552,16 @@ export async function setUserStatus(
 export async function getSettingsView(ctx: AppContext): Promise<AdminSettings> {
   const all = await getAllSettings(ctx.db)
   return {
-    baseStarsPerRaff: (all['rate.base_stars_per_raff_micro'] as number) / 1e6,
-    nairaPerStar: all['rate.naira_per_star'] as number,
+    rate: {
+      nairaPerRaff: (all['rate.base_naira_per_raff_kobo'] as number) / 100,
+      moveMinPct: all['rate.move_min_pct'] as number,
+      moveMaxPct: all['rate.move_max_pct'] as number,
+    },
+    sales: {
+      packages: all['sales.packages'] as SalesSettings['packages'],
+      minNaira: all['sales.min_naira'] as number,
+      maxNaira: all['sales.max_naira'] as number,
+    },
     maxEntriesPerUserPerRaffle: all['limits.max_entries_per_user_per_raffle'] as number | null,
     dailySpendRaffs: all['limits.daily_spend_raffs'] as number | null,
   }
@@ -564,7 +572,6 @@ export async function putLimits(ctx: AppContext, adminId: string, body: LimitsBo
   await ctx.db.transaction(async (tx) => {
     await putSetting(tx, 'limits.max_entries_per_user_per_raffle', body.maxEntriesPerUserPerRaffle, adminId)
     await putSetting(tx, 'limits.daily_spend_raffs', body.dailySpendRaffs, adminId)
-    await putSetting(tx, 'rate.naira_per_star', body.nairaPerStar, adminId)
     await appendAudit(tx, { adminId, action: 'settings.limits', targetType: 'settings', before, after: body })
   })
   return getSettingsView(ctx)
@@ -611,7 +618,7 @@ export async function overview(ctx: AppContext): Promise<AdminOverview> {
     })
     .from(sql`(select 1) as one`)
   const settingsNow = await getSettingsView(ctx)
-  const nairaPerRaff = settingsNow.baseStarsPerRaff * settingsNow.nairaPerStar
+  const nairaPerRaff = settingsNow.rate.nairaPerRaff
   const raisedRaffs = (raisedRow?.spent ?? 0) - (raisedRow?.refunded ?? 0)
   const quote = await currentQuote(ctx.db, now)
   const outbox = await outboxTotals(ctx.db, new Date(now - 86_400_000))
@@ -627,8 +634,9 @@ export async function overview(ctx: AppContext): Promise<AdminOverview> {
     pendingApprovals: p?.n ?? 0,
     securityLast24h,
     rate: {
-      starsPerRaff: quote.starsPerRaffMicro / 1e6,
-      baseStarsPerRaff: quote.baseStarsPerRaffMicro / 1e6,
+      nairaPerRaff: quote.nairaPerRaffKobo / 100,
+      // Quotes from before the naira base have none; the setting is the base they will move from next
+      baseNairaPerRaff: (quote.baseNairaPerRaffKobo ?? settingsNow.rate.nairaPerRaff * 100) / 100,
       movePct: Math.round(quote.moveMicro / 100) / 100,
       expiresAt: quote.expiresAt.toISOString(),
     },

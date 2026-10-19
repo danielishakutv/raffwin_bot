@@ -8,10 +8,30 @@ import type { Db } from '../db/client'
 import { settings } from '../db/schema'
 
 const SETTINGS = {
-  /** Stars per Raff, in millionths: 500000 = 0.5 Star per Raff (2 Raffs per Star) */
-  'rate.base_stars_per_raff_micro': z.number().int().min(1_000).max(1_000_000_000).default(500_000),
-  /** Display only: Naira value of one Star, for "about ₦…" figures */
-  'rate.naira_per_star': z.number().min(0).max(100_000).default(20),
+  /*
+   * Rate and sales (admin > Settings > Rate and sales; changes need a second
+   * admin). Replaced the Stars base on 19 Oct: Raffs are sold for naira on the
+   * sales site, which reads all of these through the relay. The old Stars keys
+   * stay in the table, unused.
+   */
+  /** Base price of one Raff in kobo: 1000 = ₦10 */
+  'rate.base_naira_per_raff_kobo': z.number().int().min(1).max(10_000_000).default(1_000),
+  /** Each clock hour's quote moves between min and max percent from the base, up or down (0 and 0 = fixed price) */
+  'rate.move_min_pct': z.number().int().min(0).max(30).default(3),
+  'rate.move_max_pct': z.number().int().min(0).max(30).default(15),
+  /** Packages on the sales site; bonusPercent is extra Raffs on top, at most 15 */
+  'sales.packages': z
+    .array(z.object({ naira: z.number().int().min(100).max(10_000_000), bonusPercent: z.number().int().min(0).max(15), label: z.string().max(24).nullable() }))
+    .max(8)
+    .default([
+      { naira: 1_000, bonusPercent: 0, label: null },
+      { naira: 5_000, bonusPercent: 5, label: 'Popular' },
+      { naira: 10_000, bonusPercent: 10, label: null },
+      { naira: 25_000, bonusPercent: 15, label: 'Best value' },
+    ]),
+  /** Smallest and largest single purchase in naira (a custom amount has no bonus) */
+  'sales.min_naira': z.number().int().min(100).max(10_000_000).default(500),
+  'sales.max_naira': z.number().int().min(100).max(10_000_000).default(500_000),
   /** Most entries one user may hold in one raffle; null = no cap */
   'limits.max_entries_per_user_per_raffle': z.number().int().min(1).nullable().default(null),
   /** Most Raffs one user may spend on entries per Lagos calendar day; null = no cap */
@@ -40,6 +60,32 @@ const SETTINGS = {
 } as const
 
 export type SettingKey = keyof typeof SETTINGS
+
+export interface RateSettings {
+  nairaPerRaffKobo: number
+  moveMinPct: number
+  moveMaxPct: number
+}
+export interface SalesSettings {
+  packages: { naira: number; bonusPercent: number; label: string | null }[]
+  minNaira: number
+  maxNaira: number
+}
+
+export async function rateSettings(db: Reader): Promise<RateSettings> {
+  return {
+    nairaPerRaffKobo: await getSetting(db, 'rate.base_naira_per_raff_kobo'),
+    moveMinPct: await getSetting(db, 'rate.move_min_pct'),
+    moveMaxPct: await getSetting(db, 'rate.move_max_pct'),
+  }
+}
+export async function salesSettings(db: Reader): Promise<SalesSettings> {
+  return {
+    packages: await getSetting(db, 'sales.packages'),
+    minNaira: await getSetting(db, 'sales.min_naira'),
+    maxNaira: await getSetting(db, 'sales.max_naira'),
+  }
+}
 export type SettingValue<K extends SettingKey> = z.infer<(typeof SETTINGS)[K]>
 export const SETTING_KEYS = Object.keys(SETTINGS) as SettingKey[]
 

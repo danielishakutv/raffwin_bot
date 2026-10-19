@@ -76,7 +76,7 @@ export function FinanceTab({ can }: { can: string[] }) {
           <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             <Stat label="Raised" value={naira(f.totals.raisedNaira)} sub={`${fmt(f.totals.raisedRaffs)} Raffs on entries`} />
             <Stat label="Profit" value={naira(f.totals.profitNaira)} sub="raised - prizes - referral pay - expenses" />
-            <Stat label="Stars received" value={fmt(f.cash.starsReceived)} sub={`= ${naira(f.cash.starsNaira)}`} />
+            <Stat label="Money received" value={naira(f.cash.nairaReceived)} sub={`${fmt(f.cash.purchases)} purchase${f.cash.purchases === 1 ? '' : 's'}`} />
             <Stat label="Raffs players hold" value={fmt(f.outstandingRaffs)} sub="owed in entries" />
           </div>
 
@@ -93,14 +93,15 @@ export function FinanceTab({ can }: { can: string[] }) {
                 ]}
               />
               <p className="mt-3 text-[11.5px] leading-snug text-neutral-500">
-                Raffs are valued at {naira(f.nairaPerRaff)} each (base Stars per Raff x {naira(f.nairaPerStar)} per Star, from Settings). Raffs prizes count at that value; physical prizes at
-                the cost entered on the raffle; prize costs count once a raffle is published. Stars purchases are not switched on yet, so money received is 0 until they are.
+                Raffs are valued at {naira(f.nairaPerRaff)} each (the base price in Settings, Rate and sales). Raffs prizes count at that value; physical prizes at the
+                cost entered on the raffle; prize costs count once a raffle is published. Money received is what buyers paid on the sales site.
               </p>
             </Card>
             <Card title="Raffs in and out">
               <KeyValues
                 rows={[
-                  ['Raffs sold for Stars', fmt(f.cash.raffsSold)],
+                  ['Raffs sold', fmt(f.cash.raffsSold)],
+                  ['of which package bonus', fmt(f.cash.bonusRaffs)],
                   ['Free: bonuses', fmt(f.freeRaffs.bonus)],
                   ['Free: admin credits', fmt(f.freeRaffs.adjustments)],
                   ['Free: Raffs prizes', fmt(f.freeRaffs.prizes)],

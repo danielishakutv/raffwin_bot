@@ -5,7 +5,7 @@ import type { AdminApproval, AdminFinance, AdminOverview, AdminRaffle, AdminUser
 import { verifyChain } from '../src/admin/audit'
 import { hashPassword, issueTicket } from '../src/admin/session'
 import { recordSecurityEvent } from '../src/lib/security-events'
-import { adminSessions, adminUsers, raffles, securityEvents, type AdminRole } from '../src/db/schema'
+import { adminSessions, adminUsers, approvals, raffles, securityEvents, type AdminRole } from '../src/db/schema'
 import { createRaffle, credit, member as open } from './fixtures'
 import { contactProof, initData, nigerianPhone, telegramId, testApp } from './helpers'
 
@@ -317,16 +317,57 @@ describe('maker-checker', () => {
     expect((await player.get('/v1/bootstrap')).body.balance).toBe(0)
   })
 
-  it('changes the rate base from the next hour once approved', async () => {
+  it('changes the naira rate and its hourly range from the next hour once approved', async () => {
     const finance = await makeAdmin('finance')
     const boss = await makeAdmin('super_admin')
-    const asked = await write(finance, '/admin/v1/settings/rate-base', { starsPerRaff: 0.8, reason: 'Fragment payout dropped' })
-    expect(asked.body.summary).toBe('Change the base rate from 0.5 to 0.8 Stars per Raff')
+    const asked = await write(finance, '/admin/v1/settings/rate-base', { nairaPerRaff: 12.5, moveMinPct: 2, moveMaxPct: 8, reason: 'Costs went up' })
+    expect(asked.status, JSON.stringify(asked.body)).toBe(202)
+    expect(asked.body.summary).toBe('Change the rate from ₦10 per Raff, moving 3-15% an hour to ₦12.5 per Raff, moving 2-8% an hour')
     await write(boss, `/admin/v1/approvals/${asked.body.id}/approve`)
-    expect((await get(boss, '/admin/v1/settings')).body.baseStarsPerRaff).toBe(0.8)
+    expect((await get(boss, '/admin/v1/settings')).body.rate).toEqual({ nairaPerRaff: 12.5, moveMinPct: 2, moveMaxPct: 8 })
+    // Refused: a fraction of a kobo, a range upside down
+    expect((await write(finance, '/admin/v1/settings/rate-base', { nairaPerRaff: 10.005, moveMinPct: 3, moveMaxPct: 15, reason: 'Too precise' })).status).toBe(400)
+    expect((await write(finance, '/admin/v1/settings/rate-base', { nairaPerRaff: 10, moveMinPct: 9, moveMaxPct: 4, reason: 'Upside down' })).status).toBe(400)
     // put it back for the other tests
-    const back = await write(boss, '/admin/v1/settings/rate-base', { starsPerRaff: 0.5, reason: 'restore test base' })
-    await write(finance, `/admin/v1/approvals/${back.body.id}/approve`)
+    const back = await write(boss, '/admin/v1/settings/rate-base', { nairaPerRaff: 10, moveMinPct: 3, moveMaxPct: 15, reason: 'restore test base' })
+    expect(back.status).toBe(200)
+    expect((await get(boss, '/admin/v1/settings')).body.rate).toEqual({ nairaPerRaff: 10, moveMinPct: 3, moveMaxPct: 15 })
+  })
+
+  it('changes the sales packages and limits once approved', async () => {
+    const finance = await makeAdmin('finance')
+    const boss = await makeAdmin('super_admin')
+    const before = (await get(boss, '/admin/v1/settings')).body.sales
+    expect(before.packages).toHaveLength(4)
+    const packages = [
+      { naira: 2_000, bonusPercent: 0, label: null },
+      { naira: 20_000, bonusPercent: 12, label: 'Big' },
+    ]
+    const asked = await write(finance, '/admin/v1/settings/sales', { packages, minNaira: 1_000, maxNaira: 200_000, reason: 'New price list' })
+    expect(asked.status, JSON.stringify(asked.body)).toBe(202)
+    expect(asked.body.summary).toBe('Change sales options to packages ₦2,000, ₦20,000 +12%; ₦1,000 to ₦200,000 (was packages ₦1,000, ₦5,000 +5%, ₦10,000 +10%, ₦25,000 +15%; ₦500 to ₦500,000)')
+    await write(boss, `/admin/v1/approvals/${asked.body.id}/approve`)
+    expect((await get(boss, '/admin/v1/settings')).body.sales).toEqual({ packages, minNaira: 1_000, maxNaira: 200_000 })
+    // A bonus over 15%, a package outside the limits
+    expect((await write(finance, '/admin/v1/settings/sales', { packages: [{ naira: 5_000, bonusPercent: 20, label: null }], minNaira: 500, maxNaira: 500_000, reason: 'Too generous' })).status).toBe(400)
+    expect((await write(finance, '/admin/v1/settings/sales', { packages: [{ naira: 600_000, bonusPercent: 0, label: null }], minNaira: 500, maxNaira: 500_000, reason: 'Too big' })).status).toBe(400)
+    const back = await write(boss, '/admin/v1/settings/sales', { ...before, reason: 'restore the defaults' })
+    expect(back.status).toBe(200)
+  })
+
+  it('an old Stars rate request still pending can only be rejected', async () => {
+    const finance = await makeAdmin('finance')
+    const boss = await makeAdmin('super_admin')
+    const [old] = await db
+      .insert(approvals)
+      .values({ action: 'rate_base_change', payload: { starsPerRaffMicro: 800_000, previousMicro: 500_000 }, reason: 'Asked before the switch', requestedByAdminId: finance.id, expiresAt: new Date(Date.now() + 3_600_000) })
+      .returning()
+    const list = (await get(boss, '/admin/v1/approvals')).body as AdminApproval[]
+    expect(list.find((a) => a.id === old!.id)?.summary).toBe('Change the base rate in Stars (no longer used: reject this and ask again in naira)')
+    const yes = await write(boss, `/admin/v1/approvals/${old!.id}/approve`)
+    expect(yes.status).not.toBe(200)
+    expect((await get(boss, '/admin/v1/settings')).body.rate.nairaPerRaff).toBe(10)
+    expect((await write(boss, `/admin/v1/approvals/${old!.id}/reject`, { note: 'Stars are gone' })).status).toBe(200)
   })
 })
 
@@ -367,7 +408,7 @@ describe('super admins act without approval', () => {
     expect(adjust.status).toBe(200)
     expect((await player.get('/v1/bootstrap')).body.balance).toBe(550)
 
-    const rate = await write(boss, '/admin/v1/settings/rate-base', { starsPerRaff: 0.5, reason: 'Keep the base' })
+    const rate = await write(boss, '/admin/v1/settings/rate-base', { nairaPerRaff: 10, moveMinPct: 3, moveMaxPct: 15, reason: 'Keep the base' })
     expect(rate.status).toBe(200)
 
     const history = (await get(boss, '/admin/v1/approvals?status=approved')).body as AdminApproval[]
@@ -439,7 +480,7 @@ describe('finance', () => {
   it('reports raised, prize costs, referral pay, expenses and margin per raffle', async () => {
     const boss = await makeAdmin('super_admin')
     // Report rate: 0.5 Star per Raff x N20 per Star = N10 per Raff
-    await put(boss, '/admin/v1/settings/limits', { maxEntriesPerUserPerRaffle: null, dailySpendRaffs: null, nairaPerStar: 20 })
+    await put(boss, '/admin/v1/settings/limits', { maxEntriesPerUserPerRaffle: null, dailySpendRaffs: null })
     const created = await write(boss, '/admin/v1/raffles', raffleInput({ entryPriceRaffs: 100, prizes: [
       { position: 1, prizeItem: 'Phone', prizeType: 'physical', costNaira: 150_000 },
       { position: 2, prizeItem: '2,000 Raffs credit', prizeType: 'raffs_credit', raffsValue: 2000 },
@@ -555,7 +596,9 @@ describe('overview, security events and the audit log', () => {
     const v = await makeAdmin('viewer')
     const o = (await get(v, '/admin/v1/overview')).body as AdminOverview
     expect(o.ledgerConsistent).toBe(true)
-    expect(o.rate.baseStarsPerRaff).toBeGreaterThan(0)
+    expect(o.rate.baseNairaPerRaff).toBe(10)
+    expect(o.rate.nairaPerRaff).toBeGreaterThanOrEqual(8.5)
+    expect(o.rate.nairaPerRaff).toBeLessThanOrEqual(11.5)
     expect(Math.abs(o.rate.movePct)).toBeGreaterThanOrEqual(3)
     expect(Math.abs(o.rate.movePct)).toBeLessThanOrEqual(15)
   })

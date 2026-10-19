@@ -81,6 +81,35 @@ const schema = z.object({
   ADMIN_IDLE_MINUTES: z.coerce.number().int().min(5).max(240).default(30),
   /** Super admins stay signed in longer between requests (the phone suspends the app in the background) */
   ADMIN_SUPER_IDLE_MINUTES: z.coerce.number().int().min(5).max(480).default(120),
+
+  /* Relay from the sales site's backend (README "Buying Raffs") ------------- */
+  /**
+   * Shared secret for the signed relay. Unset = no relay routes at all.
+   * Generate on the server: openssl rand -hex 32 (64 characters)
+   */
+  RELAY_SECRET: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/, 'RELAY_SECRET: 32-256 of A-Z a-z 0-9 _ -').optional(),
+  /** The previous secret, accepted too while a rotation is under way; remove once the sender has switched */
+  RELAY_SECRET_PREVIOUS: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/, 'RELAY_SECRET_PREVIOUS: 32-256 of A-Z a-z 0-9 _ -').optional(),
+  /** The unguessable path segment the relay lives under: /internal/<RELAY_PATH>/... */
+  RELAY_PATH: z.string().regex(/^[A-Za-z0-9_-]{24,128}$/, 'RELAY_PATH: 24-128 of A-Z a-z 0-9 _ -').optional(),
+  /** Optional comma-separated IPs allowed to call the relay. Unset = any address (the signature still applies). */
+  RELAY_ALLOWED_IPS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  /**
+   * Where the caller's address comes from for RELAY_ALLOWED_IPS. Unset = the
+   * address Express sees (TRUST_PROXY). Behind Cloudflare: cf-connecting-ip.
+   */
+  RELAY_CLIENT_IP_HEADER: z
+    .string()
+    .regex(/^[a-z0-9-]{3,64}$/)
+    .optional(),
 })
 
 export type Config = z.infer<typeof schema>

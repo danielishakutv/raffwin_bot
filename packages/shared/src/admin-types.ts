@@ -210,6 +210,7 @@ export type NotificationKind =
   | 'raffle_won'
   | 'raffle_soon'
   | 'credit'
+  | 'purchase'
   | 'transfer'
   | 'system'
 
@@ -275,7 +276,7 @@ export interface AdminEngagement {
 
 export interface AdminApproval {
   id: string
-  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel' | 'admin_risk_flag' | 'admin_risk_clear'
+  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel' | 'admin_risk_flag' | 'admin_risk_clear' | 'sales_options_change'
   /** One line a human can approve or reject from */
   summary: string
   payload: Record<string, unknown>
@@ -327,7 +328,7 @@ export interface AdminOverview {
   ledgerConsistent: boolean
   pendingApprovals: number
   securityLast24h: Record<'low' | 'medium' | 'high' | 'critical', number>
-  rate: { starsPerRaff: number; baseStarsPerRaff: number; movePct: number; expiresAt: string }
+  rate: { nairaPerRaff: number; baseNairaPerRaff: number; movePct: number; expiresAt: string }
   /** Players with a phone on file (verified through Telegram) and without */
   phones: { withPhone: number; withoutPhone: number }
   /** Bot reach: players who blocked the bot can get no messages */
@@ -380,9 +381,8 @@ export interface FinanceRaffle {
 
 export interface AdminFinance {
   period: { from: string | null; to: string | null }
-  /** Report rate: base Stars per Raff x Naira per Star (display setting) */
+  /** Report rate: the base naira price of a Raff (Settings > Rate and sales) */
   nairaPerRaff: number
-  nairaPerStar: number
   raffles: FinanceRaffle[]
   totals: {
     raisedRaffs: number
@@ -394,8 +394,8 @@ export interface AdminFinance {
     /** Sum of raffle margins minus general expenses */
     profitNaira: number
   }
-  /** Real money in: Telegram Stars paid for Raffs */
-  cash: { starsReceived: number; starsNaira: number; raffsSold: number }
+  /** Real money in: naira paid on the sales site, and the Raffs it bought (bonus included) */
+  cash: { purchases: number; nairaReceived: number; raffsSold: number; bonusRaffs: number }
   /** Raffs handed out without payment in the period: bonuses, admin credits, Raffs prizes, referral pay */
   freeRaffs: { bonus: number; adjustments: number; prizes: number; referrals: number }
   /** Raffs players hold right now: what Raffle Win owes in entries */
@@ -403,8 +403,10 @@ export interface AdminFinance {
 }
 
 export interface AdminSettings {
-  baseStarsPerRaff: number
-  nairaPerStar: number
+  /** The base price and how far each hour may move from it */
+  rate: { nairaPerRaff: number; moveMinPct: number; moveMaxPct: number }
+  /** What the sales site offers */
+  sales: { packages: { naira: number; bonusPercent: number; label: string | null }[]; minNaira: number; maxNaira: number }
   maxEntriesPerUserPerRaffle: number | null
   dailySpendRaffs: number | null
 }

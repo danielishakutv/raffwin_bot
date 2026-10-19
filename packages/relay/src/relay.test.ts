@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { creditRequest, MAX_AGE_SECONDS, relaySignature, SIGNATURE_HEADER, signRelay, TIMESTAMP_HEADER, verifyRelay } from './index'
+import { bonusRaffs, creditRequest, MAX_AGE_SECONDS, raffsForNaira, relaySignature, SIGNATURE_HEADER, signRelay, TIMESTAMP_HEADER, verifyRelay } from './index'
 
 const SECRET = 'a'.repeat(48)
 const OLD = 'b'.repeat(48)
@@ -52,6 +52,21 @@ describe('relay signature', () => {
   it('accepts the previous secret during a rotation, and says which matched', () => {
     expect(check(signRelay(OLD, 'account', body, NOW), { secrets: [SECRET, OLD] })).toEqual({ ok: true, secretIndex: 1 })
     expect(check(signRelay(SECRET, 'account', body, NOW), { secrets: [SECRET, OLD] })).toEqual({ ok: true, secretIndex: 0 })
+  })
+})
+
+describe('purchase arithmetic', () => {
+  it('rounds Raffs down, in whole numbers', () => {
+    expect(raffsForNaira(500_000, 1_000)).toBe(500)
+    expect(raffsForNaira(500_000, 1_030)).toBe(485)
+    expect(raffsForNaira(100, 1_000)).toBe(0)
+    expect(raffsForNaira(1.5, 1_000)).toBe(0)
+  })
+  it('caps a bonus at 15% and rounds down', () => {
+    expect(bonusRaffs(485, 5)).toBe(24)
+    expect(bonusRaffs(1000, 15)).toBe(150)
+    expect(bonusRaffs(1000, 40)).toBe(150)
+    expect(bonusRaffs(1000, -3)).toBe(0)
   })
 })
 

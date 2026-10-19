@@ -19,6 +19,7 @@ import {
   raffleBody,
   rateBaseBody,
   reasonBody,
+  salesOptionsBody,
 } from '@raffwin/shared/admin-schemas'
 import { cursorQuery } from '@raffwin/shared/schemas'
 import type { AdminMe } from '@raffwin/shared/admin-types'
@@ -27,7 +28,7 @@ import { eq } from 'drizzle-orm'
 import { NOTIFICATION_KINDS, raffles, users } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { requestMeta } from '../http/middleware'
-import { getSetting } from '../services/settings'
+import { rateSettings, salesSettings } from '../services/settings'
 import { decide, executeDirect, listApprovals, requestApproval } from './approvals'
 import { verifyChain } from './audit'
 import * as ops from './operations'
@@ -258,8 +259,13 @@ export function adminRoutes(ctx: AppContext): Router {
   })
   r.post('/settings/rate-base', authed, perm('settings.rate.request'), async (req, res) => {
     const body = rateBaseBody.parse(req.body)
-    const previousMicro = await getSetting(ctx.db, 'rate.base_stars_per_raff_micro')
-    await askOrRun(req, res, 'rate_base_change', { starsPerRaffMicro: Math.round(body.starsPerRaff * 1e6), previousMicro }, body.reason)
+    const rate = { nairaPerRaffKobo: Math.round(body.nairaPerRaff * 100), moveMinPct: body.moveMinPct, moveMaxPct: body.moveMaxPct }
+    await askOrRun(req, res, 'rate_base_change', { rate, previous: await rateSettings(ctx.db) }, body.reason)
+  })
+  r.post('/settings/sales', authed, perm('settings.rate.request'), async (req, res) => {
+    const body = salesOptionsBody.parse(req.body)
+    const sales = { packages: body.packages, minNaira: body.minNaira, maxNaira: body.maxNaira }
+    await askOrRun(req, res, 'sales_options_change', { sales, previous: await salesSettings(ctx.db) }, body.reason)
   })
 
   /* Features --------------------------------------------------------------- */

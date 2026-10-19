@@ -169,7 +169,7 @@ export const securityEvents = pgTable(
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
     severity: text('severity', { enum: ['low', 'medium', 'high', 'critical'] }).notNull(),
     category: text('category', {
-      enum: ['auth', 'initdata', 'webhook', 'ratelimit', 'waf', 'fraud', 'admin', 'integrity'],
+      enum: ['auth', 'initdata', 'webhook', 'ratelimit', 'waf', 'fraud', 'admin', 'integrity', 'relay'],
     }).notNull(),
     /** Short machine name of what happened, e.g. initdata_bad_hash */
     kind: text('kind').notNull(),
@@ -244,12 +244,15 @@ export const rateQuotes = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     hourStart: timestamp('hour_start', { withTimezone: true }).notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-    starsPerRaffMicro: integer('stars_per_raff_micro').notNull(),
-    baseStarsPerRaffMicro: integer('base_stars_per_raff_micro').notNull(),
+    /** Quotes before 19 Oct were in Stars; null since the naira base */
+    starsPerRaffMicro: integer('stars_per_raff_micro'),
+    baseStarsPerRaffMicro: integer('base_stars_per_raff_micro'),
     /** Signed move from the base in millionths, e.g. -84000 = -8.4% */
     moveMicro: integer('move_micro').notNull(),
-    /** Display only */
+    /** The price of one Raff this hour, in kobo. What a purchase is credited at. */
     nairaPerRaffKobo: integer('naira_per_raff_kobo').notNull(),
+    /** The admin's base the move was applied to; null on the old Stars quotes */
+    baseNairaPerRaffKobo: integer('base_naira_per_raff_kobo'),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('rate_quotes_hour_start_key').on(t.hourStart)],
@@ -388,6 +391,41 @@ export const ledger = pgTable(
     index('ledger_user_idx').on(t.userId, t.createdAt),
     index('ledger_reference_idx').on(t.referenceType, t.referenceId),
   ],
+)
+
+/**
+ * Raffs bought on the sales site, credited through the relay. Insert-only.
+ * The payment reference is unique: a repeat of the same payment can never
+ * credit twice. Amounts are what the buyer was quoted, checked against the
+ * hourly quote they name (services/purchases.ts).
+ */
+export const purchases = pgTable(
+  'purchases',
+  {
+    id: uuid('id').primaryKey(),
+    reference: text('reference').notNull(),
+    source: text('source', { enum: ['paystack'] }).notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    telegramId: bigint('telegram_id', { mode: 'number' }).notNull(),
+    /** The sales site's quote */
+    quoteId: uuid('quote_id').notNull(),
+    nairaKobo: integer('naira_kobo').notNull(),
+    rateId: uuid('rate_id')
+      .notNull()
+      .references(() => rateQuotes.id),
+    nairaPerRaffKobo: integer('naira_per_raff_kobo').notNull(),
+    baseRaffs: integer('base_raffs').notNull(),
+    bonusRaffs: integer('bonus_raffs').notNull(),
+    raffs: integer('raffs').notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true }).notNull(),
+    ledgerId: uuid('ledger_id')
+      .notNull()
+      .references(() => ledger.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('purchases_reference_key').on(t.reference), index('purchases_user_idx').on(t.userId, t.createdAt), index('purchases_created_idx').on(t.createdAt)],
 )
 
 export const referralEarnings = pgTable(
@@ -556,7 +594,7 @@ export const auditLog = pgTable(
   (t) => [uniqueIndex('audit_log_seq_key').on(t.seq), index('audit_log_target_idx').on(t.targetType, t.targetId)],
 )
 
-export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel', 'admin_risk_flag', 'admin_risk_clear'] as const
+export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel', 'admin_risk_flag', 'admin_risk_clear', 'sales_options_change'] as const
 
 /** Maker-checker: a sensitive action runs only when a second admin approves it. */
 export const approvals = pgTable(
@@ -719,6 +757,8 @@ export const NOTIFICATION_KINDS = [
   'raffle_soon',
   /** Raffs credited by an admin (an approved or direct balance adjustment) */
   'credit',
+  /** Raffs bought on the sales site arrived */
+  'purchase',
   'transfer',
   'system',
 ] as const
@@ -936,5 +976,6 @@ export type RaffleRow = typeof raffles.$inferSelect
 export type RafflePrizeRow = typeof rafflePrizes.$inferSelect
 export type EntryRow = typeof entries.$inferSelect
 export type LedgerRow = typeof ledger.$inferSelect
+export type PurchaseRow = typeof purchases.$inferSelect
 export type AdminUserRow = typeof adminUsers.$inferSelect
 export type AdminDeviceRow = typeof adminDevices.$inferSelect

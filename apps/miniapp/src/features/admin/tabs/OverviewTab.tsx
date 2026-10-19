@@ -67,11 +67,11 @@ export function OverviewTab() {
             </Card>
           </div>
 
-          <Card title="Rate now" subtitle="Stars per Raff, moving 3% to 15% from the base each hour.">
+          <Card title="Rate now" subtitle="The price of one Raff on the sales site this hour, moved from the base set in Settings.">
             <KeyValues
               rows={[
-                ['Stars per Raff', String(o.rate.starsPerRaff), 'strong'],
-                ['Base', String(o.rate.baseStarsPerRaff)],
+                ['1 Raff', naira(o.rate.nairaPerRaff), 'strong'],
+                ['Base', naira(o.rate.baseNairaPerRaff)],
                 ['Move this hour', `${o.rate.movePct > 0 ? '+' : ''}${o.rate.movePct}%`],
                 ['Until', when(o.rate.expiresAt)],
               ]}

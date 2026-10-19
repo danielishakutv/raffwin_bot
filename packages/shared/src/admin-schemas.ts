@@ -73,15 +73,44 @@ export const reasonBody = z.object({
   reason: z.string().trim().min(5, 'Say why, in a few words').max(500),
 })
 
-export const rateBaseBody = reasonBody.extend({
-  /** Stars per Raff, e.g. 0.5 */
-  starsPerRaff: z.number().min(0.001).max(1000),
-})
+export const rateBaseBody = reasonBody
+  .extend({
+    /** Naira per Raff, e.g. 10 or 12.50 */
+    nairaPerRaff: z
+      .number()
+      .min(0.01)
+      .max(100_000)
+      .refine((n) => Math.abs(Math.round(n * 100) - n * 100) < 1e-6, 'At most two decimal places (kobo)'),
+    /** Each hour moves between these percents from the base; 0 and 0 = a fixed price */
+    moveMinPct: z.number().int().min(0).max(30),
+    moveMaxPct: z.number().int().min(0).max(30),
+  })
+  .refine((b) => b.moveMinPct <= b.moveMaxPct, { message: 'The smallest move cannot be above the largest', path: ['moveMinPct'] })
+
+export const salesOptionsBody = reasonBody
+  .extend({
+    packages: z
+      .array(
+        z.object({
+          naira: z.number().int().min(100).max(10_000_000),
+          /** Extra Raffs on top, at most 15% */
+          bonusPercent: z.number().int().min(0).max(15),
+          label: z.string().trim().max(24).nullable(),
+        }),
+      )
+      .max(8),
+    minNaira: z.number().int().min(100).max(10_000_000),
+    maxNaira: z.number().int().min(100).max(10_000_000),
+  })
+  .refine((b) => b.minNaira <= b.maxNaira, { message: 'The minimum cannot be above the maximum', path: ['minNaira'] })
+  .refine((b) => b.packages.every((p) => p.naira >= b.minNaira && p.naira <= b.maxNaira), {
+    message: 'Every package must be between the minimum and the maximum',
+    path: ['packages'],
+  })
 
 export const limitsBody = z.object({
   maxEntriesPerUserPerRaffle: z.number().int().min(1).nullable(),
   dailySpendRaffs: z.number().int().min(1).nullable(),
-  nairaPerStar: z.number().min(0).max(100_000),
 })
 
 export const adjustmentBody = reasonBody.extend({

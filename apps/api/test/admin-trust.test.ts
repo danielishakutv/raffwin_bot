@@ -238,7 +238,7 @@ describe('marking an admin at risk', () => {
     expect((await http.post(`/admin/v1/approvals/${asked.body.id}/reject`).set(auth(viewer)).send({ note: 'Not convinced' })).status).toBe(200)
     // ...but no other kind (left pending; nobody approves it)
     const finance = await token(await admin('finance'))
-    const rate = await http.post('/admin/v1/settings/rate-base').set(auth(finance)).send({ starsPerRaff: 1.5, reason: 'Test request' })
+    const rate = await http.post('/admin/v1/settings/rate-base').set(auth(finance)).send({ nairaPerRaff: 15, moveMinPct: 3, moveMaxPct: 15, reason: 'Test request' })
     expect(rate.status, JSON.stringify(rate.body)).toBe(202)
     expect((await http.post(`/admin/v1/approvals/${rate.body.id}/approve`).set(auth(viewer)).send({})).status).toBe(403)
     expect((await http.post(`/admin/v1/approvals/${rate.body.id}/reject`).set(auth(viewer)).send({})).status).toBe(403)

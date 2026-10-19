@@ -19,10 +19,8 @@ export interface RateProvider {
   fetchRate(): Promise<RateQuote>
 }
 
-/** Demo base: 0.5 Star per Raff, and 1 Star shown as about ₦20, so 1 Raff is about ₦10. */
-export const DEMO_BASE_STARS_PER_RAFF = 0.5
-export const DEMO_NAIRA_PER_STAR = 20
-export const BASE_NAIRA_PER_RAFF = DEMO_BASE_STARS_PER_RAFF * DEMO_NAIRA_PER_STAR
+/** Demo base: 1 Raff = ₦10, the API's default (Settings > Rate and sales) */
+export const BASE_NAIRA_PER_RAFF = 10
 
 /* ----------------------------------------------------------------------------
  * Demo provider
@@ -51,11 +49,10 @@ export function demoQuoteAt(now: number = Date.now()): RateQuote {
   const windowStart = hourStart(now)
   const hourIndex = windowStart / RATE_TTL_MS
   const seed = hourIndex * 31 + demoSalt * 101
-  const { value } = hourlyQuote(DEMO_BASE_STARS_PER_RAFF, unitRandom(seed), unitRandom(seed * 7 + 1))
+  const { value } = hourlyQuote(BASE_NAIRA_PER_RAFF, unitRandom(seed), unitRandom(seed * 7 + 1))
   return {
     id: `demo-${hourIndex}-${demoSalt}`,
-    starsPerRaff: value,
-    nairaPerRaff: roundRate(value * DEMO_NAIRA_PER_STAR),
+    nairaPerRaff: roundRate(value),
     issuedAt: demoWindowStart && demoWindowStart >= windowStart ? demoWindowStart : windowStart,
     expiresAt: windowStart + RATE_TTL_MS,
     source: 'demo',

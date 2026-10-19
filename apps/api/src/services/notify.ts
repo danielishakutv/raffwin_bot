@@ -291,9 +291,9 @@ const QUIET_HOURS_KINDS = OPT_OUT_KINDS
  * win or credit first, then reminders and offers, then broadcasts; oldest first within each.
  * A 50,000-player announcement must not hold a transfer back for minutes.
  */
-const KIND_RANK = sql`case ${notifications.kind} when 'transfer' then 0 when 'raffle_won' then 0 when 'credit' then 0 when 'comeback' then 1 when 'reminder' then 1 else 2 end`
+const KIND_RANK = sql`case ${notifications.kind} when 'transfer' then 0 when 'raffle_won' then 0 when 'credit' then 0 when 'purchase' then 0 when 'comeback' then 1 when 'reminder' then 1 else 2 end`
 function kindRank(kind: NotificationKind): number {
-  return kind === 'transfer' || kind === 'raffle_won' || kind === 'credit' ? 0 : kind === 'comeback' || kind === 'reminder' ? 1 : 2
+  return kind === 'transfer' || kind === 'raffle_won' || kind === 'credit' || kind === 'purchase' ? 0 : kind === 'comeback' || kind === 'reminder' ? 1 : 2
 }
 
 /**

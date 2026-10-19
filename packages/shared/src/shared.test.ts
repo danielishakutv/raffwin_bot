@@ -3,7 +3,7 @@ import { prizeLabel, winnersLabel } from './prizes'
 import { isReferralCode, parseStartParam, referralEarning, REFERRAL_CODE_ALPHABET } from './referral'
 import { normalizeNigerianPhone } from './phone'
 import { kycBody, profilePatchBody } from './schemas'
-import { hourlyQuote, hourStart, raffsForStars, RATE_TTL_MS } from './rate'
+import { hourlyQuote, hourStart, RATE_TTL_MS } from './rate'
 
 describe('hourlyQuote', () => {
   it('moves 3% to 15% from the base, in either direction', () => {
@@ -26,11 +26,15 @@ describe('hourlyQuote', () => {
   })
 })
 
-describe('raffsForStars', () => {
-  it('rounds down and survives float error', () => {
-    expect(raffsForStars(100, 0.5)).toBe(200)
-    expect(raffsForStars(100, 0.515)).toBe(194)
-    expect(raffsForStars(0, 0.5)).toBe(0)
+describe('hourlyQuote with an admin range', () => {
+  it('stays inside the range it is given; 0..0 is a fixed price', () => {
+    for (let i = 0; i < 500; i += 1) {
+      const { move } = hourlyQuote(1000, Math.random(), Math.random(), { min: 0.05, max: 0.08 })
+      expect(Math.abs(move)).toBeGreaterThanOrEqual(0.05)
+      expect(Math.abs(move)).toBeLessThanOrEqual(0.08)
+    }
+    expect(hourlyQuote(1000, 0.7, 0.9, { min: 0, max: 0 }).value).toBe(1000)
+    expect(() => hourlyQuote(1000, 0.5, 0.5, { min: 0.1, max: 0.05 })).toThrow()
   })
 })
 

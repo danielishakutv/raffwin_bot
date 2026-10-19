@@ -50,7 +50,9 @@ describe('GET /v1/rate', () => {
     const move = Math.abs((row?.moveMicro ?? 0) / 1_000_000)
     expect(move).toBeGreaterThanOrEqual(0.03)
     expect(move).toBeLessThanOrEqual(0.15)
-    expect(a.starsPerRaff / ((row?.baseStarsPerRaffMicro ?? 1) / 1_000_000)).toBeCloseTo(1 + (row?.moveMicro ?? 0) / 1_000_000, 5)
+    // Whole kobo, moved from the naira base
+    expect(Math.abs(a.nairaPerRaff * 100 - (row?.baseNairaPerRaffKobo ?? 0) * (1 + (row?.moveMicro ?? 0) / 1_000_000))).toBeLessThanOrEqual(0.5)
+    expect(row?.starsPerRaffMicro).toBeNull()
   })
 
   it('agrees on one row when many requests issue the same hour at once', async () => {
@@ -59,15 +61,22 @@ describe('GET /v1/rate', () => {
     expect(new Set(rows.map((r) => r.id)).size).toBe(1)
   })
 
-  it('uses the base from settings', async () => {
-    await putSetting(db, 'rate.base_stars_per_raff_micro', 2_000_000, null)
+  it('uses the base and the movement range from settings', async () => {
+    await putSetting(db, 'rate.base_naira_per_raff_kobo', 2_000, null)
     try {
       const row = await currentQuote(db, Date.now() + 60 * 3_600_000)
-      expect(row.baseStarsPerRaffMicro).toBe(2_000_000)
-      expect(row.starsPerRaffMicro).toBeGreaterThanOrEqual(1_700_000)
-      expect(row.starsPerRaffMicro).toBeLessThanOrEqual(2_300_000)
+      expect(row.baseNairaPerRaffKobo).toBe(2_000)
+      expect(row.nairaPerRaffKobo).toBeGreaterThanOrEqual(1_700)
+      expect(row.nairaPerRaffKobo).toBeLessThanOrEqual(2_300)
+      // 0..0 = a fixed price
+      await putSetting(db, 'rate.move_min_pct', 0, null)
+      await putSetting(db, 'rate.move_max_pct', 0, null)
+      const fixed = await currentQuote(db, Date.now() + 61 * 3_600_000)
+      expect(fixed.nairaPerRaffKobo).toBe(2_000)
     } finally {
-      await putSetting(db, 'rate.base_stars_per_raff_micro', 500_000, null)
+      await putSetting(db, 'rate.base_naira_per_raff_kobo', 1_000, null)
+      await putSetting(db, 'rate.move_min_pct', 3, null)
+      await putSetting(db, 'rate.move_max_pct', 15, null)
     }
   })
 })

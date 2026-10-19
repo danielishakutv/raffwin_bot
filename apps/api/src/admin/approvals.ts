@@ -12,7 +12,7 @@ import { HttpError } from '../lib/http-error'
 import { post, type Tx } from '../services/ledger'
 import { stopDrawReminders } from '../services/draw-reminders'
 import { enqueue, openAppButton } from '../services/notify'
-import { putSetting } from '../services/settings'
+import { putSetting, type RateSettings, type SalesSettings } from '../services/settings'
 import { appendAudit } from './audit'
 import { announceRaffleCancelled } from './messages'
 import { can } from './permissions'
@@ -22,7 +22,8 @@ const EXPIRY_HOURS = 72
 type Action = (typeof APPROVAL_ACTIONS)[number]
 
 export interface Payloads {
-  rate_base_change: { starsPerRaffMicro: number; previousMicro: number }
+  rate_base_change: { rate: RateSettings; previous: RateSettings }
+  sales_options_change: { sales: SalesSettings; previous: SalesSettings }
   balance_adjustment: { userId: string; username: string | null; raffs: number }
   raffle_cancel: { raffleId: string; prizeName: string; entriesCount: number }
   admin_risk_flag: { adminId: string; name: string }
@@ -33,7 +34,13 @@ export function summarise(action: Action, payload: Record<string, unknown>): str
   switch (action) {
     case 'rate_base_change': {
       const p = payload as unknown as Payloads['rate_base_change']
-      return `Change the base rate from ${p.previousMicro / 1e6} to ${p.starsPerRaffMicro / 1e6} Stars per Raff`
+      // Asked for before 19 Oct, in Stars: it can only be rejected (execute refuses it)
+      if (!p.rate) return 'Change the base rate in Stars (no longer used: reject this and ask again in naira)'
+      return `Change the rate from ${rateText(p.previous)} to ${rateText(p.rate)}`
+    }
+    case 'sales_options_change': {
+      const p = payload as unknown as Payloads['sales_options_change']
+      return `Change sales options to ${salesText(p.sales)} (was ${salesText(p.previous)})`
     }
     case 'balance_adjustment': {
       const p = payload as unknown as Payloads['balance_adjustment']
@@ -52,6 +59,16 @@ export function summarise(action: Action, payload: Record<string, unknown>): str
       return `Clear the at-risk mark on ${p.name}`
     }
   }
+}
+
+const naira = (n: number) => `₦${n.toLocaleString('en-NG', { maximumFractionDigits: 2 })}`
+function rateText(r: RateSettings): string {
+  const move = r.moveMaxPct === 0 ? 'fixed' : `moving ${r.moveMinPct}-${r.moveMaxPct}% an hour`
+  return `${naira(r.nairaPerRaffKobo / 100)} per Raff, ${move}`
+}
+function salesText(s: SalesSettings): string {
+  const packs = s.packages.map((p) => `${naira(p.naira)}${p.bonusPercent ? ` +${p.bonusPercent}%` : ''}`).join(', ')
+  return `packages ${packs || 'none'}; ${naira(s.minNaira)} to ${naira(s.maxNaira)}`
 }
 
 export async function requestApproval<A extends Action>(
@@ -237,9 +254,19 @@ async function execute(
   switch (action) {
     case 'rate_base_change': {
       const p = payload as Payloads['rate_base_change']
-      await putSetting(tx, 'rate.base_stars_per_raff_micro', p.starsPerRaffMicro, adminId)
+      if (!p.rate) throw new HttpError('NOT_READY', 'This was asked for in Stars, which are no longer used. Reject it and ask again in naira.')
+      await putSetting(tx, 'rate.base_naira_per_raff_kobo', p.rate.nairaPerRaffKobo, adminId)
+      await putSetting(tx, 'rate.move_min_pct', p.rate.moveMinPct, adminId)
+      await putSetting(tx, 'rate.move_max_pct', p.rate.moveMaxPct, adminId)
       // The new base applies from the next hourly quote; the current hour's quote stands
       return { appliesFrom: 'next hour' }
+    }
+    case 'sales_options_change': {
+      const p = payload as Payloads['sales_options_change']
+      await putSetting(tx, 'sales.packages', p.sales.packages, adminId)
+      await putSetting(tx, 'sales.min_naira', p.sales.minNaira, adminId)
+      await putSetting(tx, 'sales.max_naira', p.sales.maxNaira, adminId)
+      return { appliesFrom: 'now' }
     }
     case 'balance_adjustment': {
       const p = payload as Payloads['balance_adjustment']

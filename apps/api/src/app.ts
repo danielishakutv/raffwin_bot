@@ -12,6 +12,7 @@ import pkg from '../package.json' with { type: 'json' }
 import { adminRoutes } from './admin/routes'
 import type { AppContext } from './context'
 import { errorHandler, notFound, requestMeta } from './http/middleware'
+import { mountRelay, RELAY_MOUNT, relayPrefix } from './http/relay'
 import { v1Routes } from './http/routes'
 import { recordSecurityEvent } from './lib/security-events'
 
@@ -22,6 +23,7 @@ export interface AppOptions {
 
 export function createApp(ctx: AppContext, options: AppOptions = {}): Express {
   const limits = options.rateLimits ?? { global: 300, auth: 20 }
+  const relay = relayPrefix(ctx)
   const app = express()
   app.disable('x-powered-by')
   app.set('trust proxy', parseTrustProxy(ctx.config.TRUST_PROXY))
@@ -36,6 +38,8 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Express {
       },
       // Health checks every minute from the watchdog would drown everything else
       autoLogging: { ignore: (req) => req.url === '/health' },
+      // The relay's path is never written to a log
+      serializers: { req: (req: { url?: string }) => (relay && req.url?.startsWith(relay) ? { ...req, url: `${RELAY_MOUNT}/*${req.url.slice(relay.length)}` } : req) },
     }),
   )
   app.use(helmet())
@@ -48,6 +52,8 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Express {
       maxAge: 600,
     }),
   )
+  // Before the JSON parser: the relay's signature covers the raw body
+  mountRelay(ctx, app, limiter(ctx, limits.global, 'relay'))
   app.use(express.json({ limit: '16kb' }))
 
   app.get('/health', async (_req, res) => {

@@ -101,14 +101,23 @@ export const relayRate = z.object({
 })
 export type RelayRate = z.infer<typeof relayRate>
 
+/** What the admin set under Settings > Rate and sales */
+export const relaySales = z.object({
+  packages: z.array(z.object({ naira: z.number().int().positive(), bonusPercent: z.number().int().min(0).max(15), label: z.string().nullable() })),
+  minNaira: z.number().int().positive(),
+  maxNaira: z.number().int().positive(),
+})
+export type RelaySales = z.infer<typeof relaySales>
+
 export const accountResponse = z.discriminatedUnion('exists', [
-  z.object({ exists: z.literal(false), rate: relayRate }),
+  z.object({ exists: z.literal(false), rate: relayRate, sales: relaySales }),
   z.object({
     exists: z.literal(true),
     /** suspended players cannot be credited */
     status: z.enum(['active', 'suspended']),
     balance: z.number().int(),
     rate: relayRate,
+    sales: relaySales,
   }),
 ])
 export type AccountResponse = z.infer<typeof accountResponse>
@@ -134,6 +143,18 @@ export const creditRequest = z
 export type CreditRequest = z.infer<typeof creditRequest>
 
 export const MAX_BONUS_PERCENT = 15
+
+/** Raffs a naira amount buys at a rate: whole Raffs, rounded down (integers only, no float error) */
+export function raffsForNaira(nairaKobo: number, nairaPerRaffKobo: number): number {
+  if (!Number.isSafeInteger(nairaKobo) || !Number.isSafeInteger(nairaPerRaffKobo) || nairaKobo <= 0 || nairaPerRaffKobo <= 0) return 0
+  return Math.floor(nairaKobo / nairaPerRaffKobo)
+}
+
+/** A package bonus: whole Raffs, rounded down */
+export function bonusRaffs(baseRaffs: number, bonusPercent: number): number {
+  const pct = Math.min(Math.max(Math.trunc(bonusPercent), 0), MAX_BONUS_PERCENT)
+  return Math.floor((baseRaffs * pct) / 100)
+}
 
 export const creditResponse = z.object({
   status: z.enum(['credited', 'already_credited']),

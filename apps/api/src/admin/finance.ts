@@ -12,7 +12,7 @@ import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm'
 import type { ExpenseBody } from '@raffwin/shared/admin-schemas'
 import type { AdminExpense, AdminFinance, FinanceRaffle } from '@raffwin/shared/admin-types'
 import type { AppContext } from '../context'
-import { adminUsers, entries, financeExpenses, ledger, rafflePrizes, raffles, referralEarnings, users } from '../db/schema'
+import { adminUsers, entries, financeExpenses, ledger, purchases, rafflePrizes, raffles, referralEarnings, users } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { getSettingsView } from './operations'
 import { appendAudit } from './audit'
@@ -30,7 +30,7 @@ function within(col: Parameters<typeof gte>[0], p: Period) {
 
 export async function report(ctx: AppContext, p: Period): Promise<AdminFinance> {
   const s = await getSettingsView(ctx)
-  const npr = s.baseStarsPerRaff * s.nairaPerStar
+  const npr = s.rate.nairaPerRaff
   const naira = (raffs: number) => Math.round(raffs * npr)
 
   const raffleRows = await ctx.db.select().from(raffles).orderBy(desc(raffles.createdAt))
@@ -109,7 +109,6 @@ export async function report(ctx: AppContext, p: Period): Promise<AdminFinance> 
 
   const [cash] = await ctx.db
     .select({
-      stars: sql<number>`coalesce(sum(${ledger.stars}) filter (where ${ledger.type} = 'purchase'), 0)::int`,
       raffsSold: sql<number>`coalesce(sum(${ledger.raffs}) filter (where ${ledger.type} = 'purchase'), 0)::int`,
       bonus: sql<number>`coalesce(sum(${ledger.raffs}) filter (where ${ledger.type} = 'bonus'), 0)::int`,
       adjustments: sql<number>`coalesce(sum(${ledger.raffs}) filter (where ${ledger.type} = 'adjustment' and ${ledger.raffs} > 0), 0)::int`,
@@ -119,11 +118,19 @@ export async function report(ctx: AppContext, p: Period): Promise<AdminFinance> 
     .from(ledger)
     .where(within(ledger.createdAt, p))
   const [owed] = await ctx.db.select({ n: sql<number>`coalesce(sum(${users.balanceCache}), 0)::int` }).from(users)
+  // Naira in: what buyers paid on the sales site (the ledger carries Raffs only)
+  const [bought] = await ctx.db
+    .select({
+      n: sql<number>`count(*)::int`,
+      kobo: sql<number>`coalesce(sum(${purchases.nairaKobo}), 0)::bigint`.mapWith(Number),
+      bonus: sql<number>`coalesce(sum(${purchases.bonusRaffs}), 0)::int`,
+    })
+    .from(purchases)
+    .where(within(purchases.createdAt, p))
 
   return {
     period: { from: p.from?.toISOString() ?? null, to: p.to?.toISOString() ?? null },
     nairaPerRaff: npr,
-    nairaPerStar: s.nairaPerStar,
     raffles: list,
     totals: {
       raisedRaffs: sum((x) => x.raisedRaffs),
@@ -134,7 +141,12 @@ export async function report(ctx: AppContext, p: Period): Promise<AdminFinance> 
       generalExpensesNaira: general,
       profitNaira: sum((x) => x.marginNaira) - general,
     },
-    cash: { starsReceived: cash?.stars ?? 0, starsNaira: Math.round((cash?.stars ?? 0) * s.nairaPerStar), raffsSold: cash?.raffsSold ?? 0 },
+    cash: {
+      purchases: bought?.n ?? 0,
+      nairaReceived: Math.round((bought?.kobo ?? 0) / 100),
+      raffsSold: cash?.raffsSold ?? 0,
+      bonusRaffs: bought?.bonus ?? 0,
+    },
     freeRaffs: {
       bonus: cash?.bonus ?? 0,
       adjustments: cash?.adjustments ?? 0,

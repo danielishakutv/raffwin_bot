@@ -1,28 +1,20 @@
 import { useEffect, useState } from 'react'
-import type { AdminApproval, AdminSettings } from '@raffwin/shared/admin-types'
+import type { AdminSettings } from '@raffwin/shared/admin-types'
 import { adminCall } from '../adminSession'
 import { useAction, useLoad } from '../hooks'
-import { askText } from '../ask'
 import { Button, Card, Err, Field, Loading, Notice, TabHeading, TextInput } from '../ui'
+import { RateAndSales } from './RateAndSales'
 import { MyDevices, TeamRisk } from './TeamSecurity'
 
 export function SettingsTab({ can, superAdmin }: { can: string[]; superAdmin: boolean }) {
   const { data: s, error, reload } = useLoad<AdminSettings>('/settings')
   const action = useAction()
-  const [base, setBase] = useState('')
-  const [limits, setLimits] = useState<{ cap: string; daily: string; nps: string } | null>(null)
+  const [limits, setLimits] = useState<{ cap: string; daily: string } | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   useEffect(() => {
-    if (s) setLimits({ cap: s.maxEntriesPerUserPerRaffle?.toString() ?? '', daily: s.dailySpendRaffs?.toString() ?? '', nps: String(s.nairaPerStar) })
+    if (s) setLimits({ cap: s.maxEntriesPerUserPerRaffle?.toString() ?? '', daily: s.dailySpendRaffs?.toString() ?? '' })
   }, [s])
 
-  const changeBase = async () => {
-    const reason = await askText(superAdmin ? 'Why change the base? It applies from the next hour.' : 'Why change the base? A second admin approves it.')
-    if (reason)
-      void action
-        .run(() => adminCall<AdminApproval>('POST', '/settings/rate-base', { starsPerRaff: Number(base), reason }))
-        .then((a) => a && (setMsg(a.status === 'approved' ? `Done: ${a.summary} (from the next hour)` : `Queued for approval: ${a.summary}`), setBase('')))
-  }
   const saveLimits = () =>
     limits &&
     void action
@@ -30,7 +22,6 @@ export function SettingsTab({ can, superAdmin }: { can: string[]; superAdmin: bo
         adminCall('PUT', '/settings/limits', {
           maxEntriesPerUserPerRaffle: limits.cap ? Number(limits.cap) : null,
           dailySpendRaffs: limits.daily ? Number(limits.daily) : null,
-          nairaPerStar: Number(limits.nps),
         }),
       )
       .then((r) => {
@@ -55,35 +46,29 @@ export function SettingsTab({ can, superAdmin }: { can: string[]; superAdmin: bo
             <Loading rows={2} />
           ) : (
             <>
-              <Card title="Rate" subtitle={`Base: ${s.baseStarsPerRaff} Stars per Raff. Each hour moves 3% to 15% up or down from the base.`}>
-                {can.includes('settings.rate.request') ? (
-                  <div className="flex flex-wrap items-end gap-2">
-                    <Field label="New base (Stars per Raff)" className="min-w-0 flex-1">
-                      <TextInput inputMode="decimal" placeholder="e.g. 0.5" value={base} onChange={(e) => setBase(e.target.value.replace(/[^0-9.]/g, ''))} />
-                    </Field>
-                    <Button disabled={!base || action.busy} onClick={() => void changeBase()}>
-                      {superAdmin ? 'Change base' : 'Ask to change'}
-                    </Button>
-                  </div>
-                ) : (
-                  <p className="text-[13px] text-neutral-600">Your role can see the rate but not change it.</p>
-                )}
-              </Card>
-              <Card title="Limits and display">
+              <RateAndSales
+                s={s}
+                canChange={can.includes('settings.rate.request')}
+                superAdmin={superAdmin}
+                onDone={(m) => {
+                  setMsg(m)
+                  reload()
+                }}
+              />
+              <Card title="Limits">
                 <div className="grid gap-3 sm:grid-cols-2">
                   {(
                     [
                       ['cap', 'Most entries per player per raffle', 'Empty = no cap'],
                       ['daily', 'Most Raffs per player per day on entries', 'Empty = no cap'],
-                      ['nps', 'Naira shown per Star', 'Display only; also values Raffs in Finance'],
-                    ] as ['cap' | 'daily' | 'nps', string, string][]
+                    ] as ['cap' | 'daily', string, string][]
                   ).map(([k, label, hint]) => (
-                    <Field key={k} label={label} hint={hint} className={k === 'nps' ? 'sm:col-span-2' : undefined}>
+                    <Field key={k} label={label} hint={hint}>
                       <TextInput
-                        inputMode={k === 'nps' ? 'decimal' : 'numeric'}
+                        inputMode="numeric"
                         value={limits[k]}
                         disabled={!can.includes('settings.limits.write')}
-                        onChange={(e) => setLimits({ ...limits, [k]: e.target.value.replace(k === 'nps' ? /[^0-9.]/g : /[^0-9]/g, '') })}
+                        onChange={(e) => setLimits({ ...limits, [k]: e.target.value.replace(/[^0-9]/g, '') })}
                       />
                     </Field>
                   ))}

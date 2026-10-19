@@ -100,14 +100,12 @@ export interface Transaction {
 }
 
 /**
- * The price of a Raff in Telegram Stars for one clock hour. Admins set a base;
- * each hour moves 3% to 15% up or down from that base (never from the
- * previous hour), so a quote stays within 85% to 115% of the base.
+ * The naira price of a Raff for one clock hour. Admins set a base and a
+ * movement range; each hour moves up or down from that base (never from the
+ * previous hour). Raffs are sold on the sales site, not in the Mini App.
  */
 export interface RateQuote {
   id: string
-  starsPerRaff: number
-  /** Display only: about how many Naira one Raff is worth at this quote */
   nairaPerRaff: number
   /** Epoch ms when the quote became valid */
   issuedAt: number
