@@ -38,7 +38,11 @@ node infra/sales/assemble-release.mjs <repo> <root> instaplaytest <sha>   # and 
 tar czf instaplaytest-<sha>.tgz instaplaytest-<sha>
 ```
 
-On the server, per environment (`e=instaplaytest`, then `e=instaplay`):
+On the server, per environment (`e=instaplaytest`, then `e=instaplay`). Run these with the
+default umask: under `umask 077` (as the backup script uses) `npm install` leaves node_modules
+readable by root only, and the service, which runs as its own user, fails with
+ERR_MODULE_NOT_FOUND. That took live down for two minutes on 19 Oct 2026. Before switching,
+check `runuser -u $e -- node -e 'import("pino")'` from the release's api directory.
 
 ```sh
 scp <e>-<sha>.tgz <server>:/root/          # compare sha256 on both sides
