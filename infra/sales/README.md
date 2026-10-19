@@ -65,7 +65,15 @@ Each login bot needs its domain set in BotFather (`/setdomain`), or Telegram ref
 
 ## Paystack
 
-Webhook URLs (set in the dashboard, separately for Test and Live mode):
-`https://<sales-test-host>/api/paystack/webhook` and `https://<sales-host>/api/paystack/webhook`.
+The Paystack account is shared with other apps, and Paystack allows one webhook URL per mode.
+Live mode's URL is the organisation's fan-out endpoint (ta_admin, `/api/v1/integrations/paystack/webhook`),
+which checks each event and passes it on byte for byte, with Paystack's signature, to every target
+in its Finance > Online payments list. The live sales host's `https://<sales-host>/api/paystack/webhook`
+is one of those targets; Paystack's own retries end at ta_admin, so daily reconciliation is the
+backstop if a pass-on fails. Test mode's URL can point straight at `https://<sales-test-host>/api/paystack/webhook`.
+
+Both the webhook and reconciliation act only on this site's own references (`ip_` + 32 hex);
+every other app's payment is answered 200 and dropped, never stored or flagged. Do not set
+`PAYSTACK_WEBHOOK_IPS` on live: forwarded events come from the fan-out server, not Paystack.
 Reconciliation by hand: `node --env-file=/srv/$e/shared/api.env dist/reconcile.js [from] [to]`
 from `/srv/$e/current/api`.
