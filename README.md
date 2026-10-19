@@ -17,8 +17,13 @@ form or password for players: opening the bot is the account.
 apps/
   miniapp/    Telegram Mini App (React 19, Vite, Tailwind, Zustand). Player screens and the admin screen.
   api/        API (Express 5, Drizzle ORM, PostgreSQL 14+), Telegram bot webhook (grammY), CLIs.
+  buy-api/    Sales site backend: Telegram login, Paystack checkout and webhook, credit outbox (own database).
+  buy-web/    Sales site pages (React 19, Vite, Tailwind). Talks only to buy-api, on its own domain.
 packages/
-  shared/     Types, validation, request schemas, rate and referral rules used by both apps.
+  shared/     Types, validation, request schemas, rate and referral rules used by the game (not the sales site).
+  relay/      The signed contract between buy-api and the API: signing, checks, request shapes.
+scripts/
+  check-separation.mjs   Fails a build if the sales site names the game or the game names the sales site.
 infra/
   scripts/    Server provisioning and release scripts (additive; they never delete).
   runbook/    Server runbook: what runs where, deploy, restore, troubleshooting.
@@ -81,8 +86,9 @@ Mini App build settings are in `apps/miniapp/.env.*` (no secrets there; they shi
 
 - **Account:** created on the first open from the player's Telegram account. Their username
   and name come from Telegram.
-- **Raffs:** each raffle has a fixed entry price in Raffs. Raffs are priced in Telegram Stars,
-  with a base rate an admin sets and an hourly move of 3% to 15% up or down from that base.
+- **Raffs:** each raffle has a fixed entry price in Raffs. Nothing is sold inside the Mini App
+  (no prices, no payment links): players get Raffs on the separate sales site (below), from
+  voucher codes (Wallet > Redeem a code), as prizes, from referrals and bonuses.
 - **Entries:** one database transaction locks the raffle, assigns contiguous ticket numbers
   and moves the balance. A retried tap never makes a second entry, and a raffle can never
   sell more entries than it has.
@@ -105,10 +111,17 @@ There is no admin website. An admin signs in inside Telegram:
    sign-in binds that Telegram account to the admin; afterwards the admin works only from it.
 
 The admin screen covers the overview, raffles (create, open, ask to cancel), approvals,
-players (search, suspend, ask to adjust a balance), settings (rate base, limits, your own
-password), security events, the audit log with a tamper check, and admins (add, reset,
-disable). Anything that moves money or changes the rate needs a second admin's approval.
+players (search, suspend, ask to adjust a balance), vouchers, settings (rate and sales, limits,
+your own password), security events, the audit log with a tamper check, and admins (add,
+reset, disable). Anything that moves money or changes the rate needs a second admin's approval.
 Every admin request is recorded in the audit log.
+
+- **Rate and sales** (Settings): the base price of one Raff in naira, the hourly movement range
+  (3% to 15% by default; 0 and 0 is a fixed price), the packages and their bonus (at most 15%),
+  and the smallest and largest purchase. The sales site reads all of these through the relay.
+- **Vouchers:** ask for a batch (vendor, Raffs per code, how many, optional expiry); once a second
+  admin approves, issue the codes. They are shown **once**, to download or copy for the vendor:
+  only their SHA-256 is stored. Look a code up to see who used it; void a code or a batch.
 
 Create the first admin on the server with
 `node --env-file=.env dist/create-admin.js --username <name> --name "<full name>" --telegram <telegram username> --role super_admin`.
@@ -119,12 +132,86 @@ It prints the password once.
 See `infra/runbook/SERVER-RUNBOOK-raffwin.md` for installing a server, releasing a new
 version, rollback, backups and troubleshooting.
 
-## Not built yet
+## Buying Raffs: the sales site
 
-- **Buying Raffs with Telegram Stars:** invoices, payment webhooks, refunds, reconciliation.
+Raffs are sold on a separate public site, `https://<sales-host>/`, on another server, with its own
+database. **The two never name each other:** the sales site's pages, bundles, responses, redirects
+and errors carry no trace of the game's domain, and the Mini App and bot never link to the sales
+site. The main API's address lives only in the sales backend's server-side env (`MAIN_API_URL`).
+`scripts/check-separation.mjs` enforces it on every sales build and in the tests.
 
-Until it exists, players enter with credited Raffs; admins credit Raffs through an approved
-adjustment.
+### The payment flow
+
+```
+browser            buy-api (sales server)                 Paystack             main API
+  | Telegram login  |                                       |                    |
+  |---------------->| verify widget hash (SHA-256 of token) |                    |
+  |                 |----------- account (signed) ----------------------------->| balance, rate, packages
+  | pick an amount  |                                       |                    |
+  |---------------->| quote: telegram id, naira, rate id,   |                    |
+  |                 | Raffs, bonus, expiry (30 min)         |                    |
+  |                 |-- initialize (reference, metadata) -->|                    |
+  |<-- redirect to Paystack checkout -----------------------|                    |
+  |                 |<-- webhook charge.success (signed) ---|                    |
+  |                 | check HMAC-SHA512, answer 200 at once |                    |
+  |                 |-- GET /transaction/verify/:ref ------>|                    |
+  |                 | status, kobo, NGN, metadata = quote?  |                    |
+  |                 | save payment + pending credit (one tx)|                    |
+  |                 |----------- credit (signed) ------------------------------->| once per reference:
+  |                 |<---------- credited / already ---------------------------- | ledger + purchases row
+  | /paid page polls|  delivered                            |                    | bot tells the player
+```
+
+- **Credited Raffs come from the stored quote**, never from the rate when the webhook arrives. The
+  main API still checks every credit: the rate must be a real hourly quote, the Raffs exactly what
+  the naira buys at it, the bonus at most 15%, the naira under the admin's maximum.
+- **Time limits:** a quote can be paid for 30 minutes; a payment confirmed within 2 hours of its
+  quote is credited at the quote. Later, or with any difference from the quote, it is **flagged**,
+  not credited.
+- **Delivery** is an outbox: the credit is saved before it is sent, retried after 30 s, 1, 2, 4 ...
+  minutes up to hourly, for as long as it takes, and marked delivered only when the main API
+  confirms. Refused credits (no account, suspended, out of bounds) are not retried; they are flagged.
+- **Flags** (late, mismatch, refused, a day undelivered, unmatched, refund, dispute) go to the main
+  API, which records a security event and messages the super and finance admins by bot. They are
+  settled by hand: a refund in Paystack, or an admin credit.
+- **Reconciliation:** every day at 02:00 Lagos the sales backend lists Paystack's successful
+  payments for the two days before, settles any it has no record of, and flags payments with no
+  quote. By hand: `node dist/reconcile.js [YYYY-MM-DD from] [YYYY-MM-DD to]`.
+- **No account, no sale:** checkout is refused if the Telegram account has no game account yet.
+
+### Configuration
+
+| Where | Variable | What it is |
+|---|---|---|
+| main API | `RELAY_SECRET`, `RELAY_PATH` | Shared secret and the unguessable path segment; unset = no relay routes |
+| main API | `RELAY_SECRET_PREVIOUS` | Only during a rotation (below) |
+| main API | `RELAY_ALLOWED_IPS`, `RELAY_CLIENT_IP_HEADER` | Optional allowlist of the sales server; behind Cloudflare the header is `cf-connecting-ip` |
+| buy-api | `MAIN_API_URL`, `RELAY_SECRET`, `RELAY_PATH` | Where the main API is (server-side only) and the same secret and path |
+| buy-api | `LOGIN_BOT_TOKEN`, `LOGIN_BOT_USERNAME` | A login bot of its own per environment, its domain set in BotFather (`/setdomain`) |
+| buy-api | `PAYSTACK_SECRET_KEY` | `sk_test_` on staging, `sk_live_` on production; the process refuses to start otherwise |
+| buy-api | `PUBLIC_URL`, `DATABASE_URL`, `IP_HASH_SALT`, `CLIENT_IP_HEADER` | The site's own address, its database, address hashing |
+| buy-api | `PAYSTACK_WEBHOOK_IPS`, `QUOTE_MINUTES`, `CREDIT_WINDOW_MINUTES`, `RECONCILE_HOUR` | Optional; defaults in `apps/buy-api/.env.example` |
+| buy-web | `VITE_SITE_NAME` | The name the site shows (build time, not secret) |
+
+The Paystack webhook URL is `https://<sales-host>/api/paystack/webhook`, set separately for test
+and live mode in the Paystack dashboard.
+
+### Rotating the relay secret
+
+No downtime and no lost credits: the main API accepts the old and the new secret during the switch,
+and the sales outbox simply retries anything refused in between.
+
+1. On the **main API** server, generate the new secret there (never on a laptop or in a chat):
+   `openssl rand -hex 32 > /root/relay-secret.new` (mode 600). Set `RELAY_SECRET_PREVIOUS` to the
+   current value and `RELAY_SECRET` to the new one in the API's env file. Restart the API.
+2. Copy the new secret to the **sales** server (scp of the file, never pasted), set it as
+   `RELAY_SECRET` in buy-api's env file, restart buy-api.
+3. Check the main API's log: no more `relay signed with the previous secret` warnings, and sales
+   credits arriving. Then remove `RELAY_SECRET_PREVIOUS` from the API's env and restart it.
+4. Confirm a request signed with the old secret now gets 401 (a `relay_bad_signature` security event).
+
+Change `RELAY_PATH` the same way if it ever appears somewhere it should not: set the new path on
+both sides (the main API first), then restart both.
 
 Draws exist since 19 Oct (`apps/api/src/services/draw.ts`): a seed committed when a raffle
 opens, the draw a few seconds after the deadline (only with at least 5 entries; below that

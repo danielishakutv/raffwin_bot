@@ -67,11 +67,20 @@ Admins can change their own password. Super admins add, reset and disable admins
   balance after it. `users.balance_cache` changes in the same statement, and the admin
   overview checks that the two always agree. Database triggers refuse UPDATE and DELETE on
   `ledger`, `audit_log` and `security_events`.
-- **Rate.** An admin sets a base price in Stars per Raff. Each clock hour gets one quote: a
-  move of 3% to 15% up or down from the base (never from the previous hour), drawn from a
+- **Rate.** An admin sets a base price of one Raff in naira (kobo) and a movement range
+  (Settings > Rate and sales; 3% to 15% by default). Each clock hour gets one quote: a move
+  inside the range, up or down from the base (never from the previous hour), drawn from a
   CSPRNG. It is stored with the hour as a unique key, so concurrent requests agree on it.
-  Rates are integers in millionths. The rate prices buying Raffs; raffle entries have a fixed
-  Raffs price.
+  The rate prices Raffs on the sales site (19 Oct; the Stars base before it is retired);
+  raffle entries have a fixed Raffs price.
+- **Purchases** arrive from the separate sales site through a signed relay
+  (`http/relay.ts`, `@raffwin/relay`): HMAC-SHA256 over timestamp, operation and body, five
+  minutes old at most, the old and new secret both accepted during a rotation. A credit is
+  checked against the hourly quote it names and written once per payment reference
+  (`purchases`, insert-only, unique reference) with its ledger row. See README, "Buying Raffs".
+- **Vouchers** (`services/vouchers.ts`): batches approved by a second admin, codes issued once
+  and stored as SHA-256 only, redeemed once under the code's row lock, five wrong codes an
+  hour per player.
 - **Entries.** One transaction locks the raffle row, then the player and their referrer in
   id order (so two entries can never wait on each other). It then checks status, deadline,
   stock, per-raffle and daily caps and the balance, assigns contiguous ticket numbers,
@@ -127,11 +136,10 @@ commands: `infra/runbook/SERVER-RUNBOOK-raffwin.md`.
 
 ## 10. Still to build
 
-1. **Telegram Stars purchases.** `createInvoiceLink` in `XTR`, then `pre_checkout_query` and
-   `successful_payment` on the webhook, crediting the ledger once per
-   `telegram_payment_charge_id`. Also refunds through approvals, and a nightly
-   reconciliation against `getStarTransactions`. The bot already answers `/paysupport`, as
-   Telegram requires.
+1. **Purchases: built 19 Oct** as a separate sales site with Paystack (apps/buy-api,
+   apps/buy-web; README, "Buying Raffs"), not inside the Mini App. Still to build: taking
+   Raffs back automatically after a Paystack refund or chargeback (today flagged to admins,
+   settled by hand).
 2. **Draws: built 19 Oct** (`services/draw.ts`, worker loop every 5 s). The seed is fixed
    and its SHA-256 published when a raffle opens. At the deadline, with at least
    `max(5, prizes)` tickets sold, one distinct ticket per place comes from the seed, the
