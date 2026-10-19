@@ -4,6 +4,8 @@
 # prunes (house rule: nothing is deleted); clear old ones by hand when needed.
 # A failure is reported through the box's alert path and exits non-zero.
 set -u
+# Dumps are owner-only from the moment they exist, partial ones included
+umask 077
 day=$(date +%F)
 status=0
 for db in instaplay instaplaytest; do
