@@ -1,0 +1,2 @@
+# Nightly dumps of the sales site databases (see the script)
+50 2 * * * root /usr/local/sbin/instaplay-backup.sh >> /var/log/instaplay-backup.log 2>&1

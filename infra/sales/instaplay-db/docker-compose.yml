@@ -1,0 +1,48 @@
+# Sales site database on aictig (77.237.243.210) -- /srv/instaplay-db/docker-compose.yml
+#
+# One Postgres container, two databases: instaplay (live) and instaplaytest
+# (test), each with its own login role. The APIs run as systemd units
+# (instaplay-api, instaplaytest-api) and the pages are static files served by
+# Apache, so this is the only container.
+#
+# Loopback only, on 5435 (5432-5434 are taken by other projects here). Binding
+# 0.0.0.0 would expose it to the internet: Docker publishes past firewalld.
+# Passwords come from /srv/instaplay-db/.env (root, 600), generated on this box.
+# The roles and databases are made once, on the first start of an empty volume
+# (init/01-databases.sh); later starts never touch them.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: instaplay-db
+    restart: always
+    ports:
+      - "127.0.0.1:5435:5432"
+    environment:
+      POSTGRES_USER: instaplay_admin
+      POSTGRES_DB: instaplay_admin
+      POSTGRES_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in /srv/instaplay-db/.env}
+      LIVE_DB_PASSWORD: ${LIVE_DB_PASSWORD:?set LIVE_DB_PASSWORD in /srv/instaplay-db/.env}
+      TEST_DB_PASSWORD: ${TEST_DB_PASSWORD:?set TEST_DB_PASSWORD in /srv/instaplay-db/.env}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - /srv/instaplay-db/backups:/backups
+    # This box also runs mail and ~26 sites: a runaway here hits its own ceiling
+    mem_limit: 384m
+    shm_size: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U instaplay_admin -d instaplay_admin"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  pgdata:

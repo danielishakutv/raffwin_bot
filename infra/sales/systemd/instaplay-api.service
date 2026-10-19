@@ -1,0 +1,41 @@
+[Unit]
+Description=Sales site API (instaplay) on 127.0.0.1:3420
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=instaplay
+Group=instaplay
+WorkingDirectory=/srv/instaplay/current/api
+# Root-only; systemd reads it before dropping to the service user
+EnvironmentFile=/srv/instaplay/shared/api.env
+Environment=GIT_COMMIT=set-by-deploy
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/server.js
+Restart=always
+RestartSec=5
+
+# This box also runs mail and ~26 sites. A runaway here must hit its own
+# ceiling and be restarted, not take the machine with it.
+MemoryMax=384M
+MemoryHigh=320M
+Environment=NODE_OPTIONS=--max-old-space-size=256
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=instaplay-api
+
+[Install]
+WantedBy=multi-user.target
