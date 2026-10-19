@@ -40,6 +40,12 @@ async function creditOf(reference: string) {
 }
 
 describe('signing in', () => {
+  it('gives the page the login bot id (public), never its token', async () => {
+    const res = await http.get('/api/config')
+    expect(res.body).toEqual({ loginBotId: 987654321, quoteMinutes: 30 })
+    expect(JSON.stringify(res.body)).not.toContain('TEST-login-bot-token')
+  })
+
   it('sets an httpOnly session cookie and stores only its hash', async () => {
     const tg = telegramId()
     const res = await http.post('/api/auth/telegram').set('content-type', 'application/json').send(widgetLogin({ id: tg, username: 'ada' }))

@@ -65,7 +65,7 @@ async function call<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unkn
 }
 
 export const api = {
-  config: () => call<{ loginBot: string; quoteMinutes: number }>('GET', '/config'),
+  config: () => call<{ loginBotId: number; quoteMinutes: number }>('GET', '/config'),
   login: (widget: Record<string, unknown>) => call<{ buyer: Buyer }>('POST', '/auth/telegram', widget),
   logout: () => call<{ ok: true }>('POST', '/auth/logout', {}),
   me: () => call<Me>('GET', '/me'),

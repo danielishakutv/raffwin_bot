@@ -25,7 +25,8 @@ export function apiRoutes(ctx: AppContext): Router {
   const authed = requireBuyer(ctx)
 
   r.get('/config', (_req, res) => {
-    res.json({ loginBot: ctx.config.LOGIN_BOT_USERNAME, quoteMinutes: ctx.config.QUOTE_MINUTES })
+    // The login bot's numeric id (the part of its token before the colon: public, not the secret)
+    res.json({ loginBotId: Number(ctx.config.LOGIN_BOT_TOKEN.split(':')[0]), quoteMinutes: ctx.config.QUOTE_MINUTES })
   })
 
   /* Sign-in ----------------------------------------------------------------- */

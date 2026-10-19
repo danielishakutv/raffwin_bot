@@ -6,11 +6,11 @@
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, ApiError, int, naira, type Me, type Purchase } from './api'
-import { TelegramLogin } from './TelegramLogin'
+import { readReturnedLogin, TelegramLogin } from './TelegramLogin'
 
 const SITE = import.meta.env.VITE_SITE_NAME || 'InstaPlay'
 
-type Load = { state: 'loading' } | { state: 'out'; bot: string } | { state: 'in'; me: Me; bot: string } | { state: 'error'; message: string }
+type Load = { state: 'loading' } | { state: 'out'; botId: number } | { state: 'in'; me: Me } | { state: 'error'; message: string }
 
 export function App() {
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -18,27 +18,29 @@ export function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const { loginBot } = await api.config()
+      const { loginBotId } = await api.config()
       try {
-        setLoad({ state: 'in', me: await api.me(), bot: loginBot })
+        setLoad({ state: 'in', me: await api.me() })
       } catch (error) {
-        if (error instanceof ApiError && error.status === 401) setLoad({ state: 'out', bot: loginBot })
+        if (error instanceof ApiError && error.status === 401) setLoad({ state: 'out', botId: loginBotId })
         else throw error
       }
     } catch (error) {
       setLoad({ state: 'error', message: error instanceof Error ? error.message : 'Something went wrong.' })
     }
   }, [])
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
-
   const onAuth = useCallback(
     (user: Record<string, unknown>) => {
       void api.login(user).then(refresh, (error: unknown) => setLoad({ state: 'error', message: error instanceof Error ? error.message : 'Login failed.' }))
     },
     [refresh],
   )
+  useEffect(() => {
+    // Back from a full-page Telegram login (phones): the signed result is in the address
+    const returned = readReturnedLogin()
+    if (returned) onAuth(returned)
+    else void refresh()
+  }, [refresh, onAuth])
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-4 pb-10 pt-6">
@@ -55,7 +57,7 @@ export function App() {
           {load.message}
         </Notice>
       )}
-      {load.state === 'out' && <SignedOut bot={load.bot} onAuth={onAuth} paying={!!paidRef} />}
+      {load.state === 'out' && <SignedOut botId={load.botId} onAuth={onAuth} paying={!!paidRef} />}
       {load.state === 'in' && (paidRef ? <Paid reference={paidRef} onDone={refresh} /> : <Shop me={load.me} refresh={refresh} />)}
 
       <footer className="mt-auto pt-10 text-center text-[12px] leading-relaxed text-ink/50">
@@ -69,7 +71,7 @@ export function App() {
 
 /* Signed out ------------------------------------------------------------------- */
 
-function SignedOut({ bot, onAuth, paying }: { bot: string; onAuth: (u: Record<string, unknown>) => void; paying: boolean }) {
+function SignedOut({ botId, onAuth, paying }: { botId: number; onAuth: (u: Record<string, unknown>) => void; paying: boolean }) {
   return (
     <section className="card overflow-hidden">
       <div className="bg-night px-5 pb-6 pt-7 text-white">
@@ -79,7 +81,7 @@ function SignedOut({ bot, onAuth, paying }: { bot: string; onAuth: (u: Record<st
       </div>
       <div className="flex flex-col gap-4 p-5">
         {paying && <Notice tone="info">Log in again to see your payment.</Notice>}
-        <TelegramLogin bot={bot} onAuth={onAuth} />
+        <TelegramLogin botId={botId} onAuth={onAuth} />
         <ol className="grid gap-2 text-[14px] text-ink/70">
           <Step n={1}>Log in with Telegram</Step>
           <Step n={2}>Choose how many Raffs</Step>
