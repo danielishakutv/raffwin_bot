@@ -1,10 +1,8 @@
 /**
- * The hourly Stars-per-Raff quote, as the UI sees it.
- *
- * Entries are priced in fixed Raffs (raffle.entryPriceRaffs); the quote only
- * prices buying Raffs, and gives the "about ₦…" display figures. The rule
- * itself (3% to 15% up or down from the base, every clock hour) lives in
- * @raffwin/shared so the demo and the API cannot disagree.
+ * The hourly naira price of a Raff, as the UI sees it. Since 19 Oct the
+ * player app shows no prices (Raffs are not sold in the Mini App); the admin
+ * still sees the rate, and the demo keeps a quote. The rule itself (a move
+ * within the admin's range, every clock hour) lives in @raffwin/shared.
  *
  * The real API supplies live quotes (GET /v1/rate). The demo provider derives
  * the same kind of quote deterministically from the hour, so a reload inside

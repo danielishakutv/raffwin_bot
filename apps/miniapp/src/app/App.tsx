@@ -7,7 +7,6 @@ import { TelegramGate } from './TelegramGate'
 import { Orbs } from '@/components/ui/Orbs'
 import { StagingBadge } from '@/components/ui/StagingBadge'
 import { Toaster } from '@/components/ui/Toast'
-import { useRateLifecycle } from '@/hooks/useRateLifecycle'
 import { useLiveSync } from '@/hooks/useLiveSync'
 import { env } from '@/services/env'
 import { installAudioUnlock } from '@/services/sound'
@@ -34,7 +33,6 @@ const BrowserAdmin = lazy(() => import('@/features/admin/BrowserAdmin').then((m)
 
 /** Mounted inside the gate so the rate loop only runs for real sessions. */
 function RateLifecycle() {
-  useRateLifecycle()
   // Counts, balance and raffle states stay current without a refresh
   useLiveSync()
   return null

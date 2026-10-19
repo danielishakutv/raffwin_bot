@@ -228,8 +228,8 @@ function WelcomeSlide({ name }: { name: string }) {
         Welcome to Raffle Win, <span className="text-brand">{name}</span>
       </h1>
       <p className="mt-3 max-w-[34ch] text-[15px] leading-6 text-mist">
-        Buy Raffs with Naira, enter the raffles you like, and watch the draw happen live. Every raffle shows its
-        prizes up front.
+        Enter the raffles you like with Raffs, and watch the draw happen live. Every raffle shows its prizes up
+        front.
       </p>
     </div>
   )
@@ -239,8 +239,8 @@ const steps = [
   {
     icon: Coins,
     tone: 'bg-sunny text-ink',
-    title: 'Buy Raffs with Naira',
-    body: 'Raffs are the in-app currency. The Naira rate is shown on every screen and is locked for one hour at a time.',
+    title: 'Raffs are your entries',
+    body: 'Raffs are the in-app currency. Redeem a voucher code in your wallet, win them as prizes, or earn them by inviting friends.',
   },
   {
     icon: Ticket,

@@ -490,54 +490,40 @@ export async function drawRaffle(raffleId: string): Promise<{ raffle: Raffle; ba
  * Wallet
  * -------------------------------------------------------------------------- */
 
-export interface BuyRaffsRequest {
-  packageId: string
-  naira: number
+export interface RedeemVoucherResponse {
   raffs: number
-  feeNaira: number
-  rateId: string
-  /** Demo switch to exercise the failure path. Never exists in the real API. */
-  simulateFailure?: boolean
-}
-
-export interface BuyRaffsResponse {
   balance: number
-  transaction: Transaction
+  transactionId: string
 }
 
-export async function buyRaffs(req: BuyRaffsRequest): Promise<BuyRaffsResponse> {
-  await jitter(1800, 600)
+/** Demo: any well-formed code (16 of 2-9 and A-Z without I and O) adds 100 Raffs, once per code per session */
+const DEMO_VOUCHER_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
+const demoRedeemed = new Set<string>()
+
+export async function redeemVoucher(code: string): Promise<RedeemVoucherResponse> {
+  await jitter(900, 400)
   requireProfile()
-  if (req.simulateFailure) {
-    mutateDb((db) => {
-      db.transactions.unshift({
-        id: newId('tx'),
-        type: 'purchase',
-        raffs: 0,
-        naira: req.naira + req.feeNaira,
-        stars: null,
-        note: `Card payment declined (demo)`,
-        createdAt: new Date().toISOString(),
-        status: 'failed',
-      })
-    })
-    throw new ApiError('PAYMENT_DECLINED', 'The demo bank declined this card. Try again or use another card.')
+  const normalized = code.toUpperCase().replace(/[\s-]/g, '')
+  if (normalized.length !== 16 || [...normalized].some((ch) => !DEMO_VOUCHER_ALPHABET.includes(ch))) {
+    throw new ApiError('INVALID_INPUT', 'That is not a code. Codes have 16 letters and numbers, like ABCD-EFGH-JKLM-NPQR.')
   }
+  if (demoRedeemed.has(normalized)) throw new ApiError('INVALID_INPUT', 'That code has already been used.')
+  demoRedeemed.add(normalized)
   return clone(
     mutateDb((db) => {
-      db.balance += req.raffs
+      db.balance += 100
       const transaction: Transaction = {
         id: newId('tx'),
-        type: 'purchase',
-        raffs: req.raffs,
-        naira: req.naira + req.feeNaira,
+        type: 'voucher',
+        raffs: 100,
+        naira: null,
         stars: null,
-        note: `Bought Raffs (demo card)`,
+        note: `Voucher ...${normalized.slice(-4)}`,
         createdAt: new Date().toISOString(),
         status: 'completed',
       }
       db.transactions.unshift(transaction)
-      return { balance: db.balance, transaction }
+      return { raffs: 100, balance: db.balance, transactionId: transaction.id }
     }),
   )
 }

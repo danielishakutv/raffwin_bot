@@ -26,7 +26,7 @@ const adminLoading = <div className="fixed inset-0 z-40 bg-neutral-50" aria-labe
  *  /home              dashboard
  *  /raffles           swipe deck
  *  /raffles/:id       deck with the detail sheet open
- *  /wallet            buy Raffs (demo payment)
+ *  /wallet            balance, redeem a code, send Raffs
  *  /profile           profile, address, verification, contact, settings
  *  /profile/history   transaction history
  *  /profile/entries   my entries

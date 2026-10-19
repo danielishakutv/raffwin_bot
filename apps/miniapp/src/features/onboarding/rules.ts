@@ -11,9 +11,9 @@ export const RULES_SECTIONS: { title: string; items: string[] }[] = [
   {
     title: 'Entries',
     items: [
-      'Raffles are entered with Raffs. Raffs are bought with Naira at the rate shown in the app at the time of purchase.',
+      'Raffles are entered with Raffs. You get Raffs from voucher codes, prizes, referrals and bonuses.',
       'Each entry is one ticket in the draw. You may buy several entries for the same raffle.',
-      'Entries are final once confirmed and cannot be refunded or moved to another raffle.',
+      'Entries are final once confirmed and cannot be moved to another raffle. A raffle that does not reach the entries it needs to be drawn is cancelled and every entry is refunded in full.',
     ],
   },
   {

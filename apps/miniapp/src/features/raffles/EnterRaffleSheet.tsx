@@ -9,13 +9,11 @@ import { Stepper } from '@/components/ui/Field'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { Sheet } from '@/components/ui/Sheet'
 import { toast } from '@/components/ui/toastStore'
-import { useRate } from '@/hooks/useRate'
 import type { Raffle } from '@/data/types'
 import { PhoneSheet } from '@/features/phone/PhoneShare'
 import { burst } from '@/services/confetti'
-import { formatInt, formatNaira } from '@/services/format'
+import { formatInt } from '@/services/format'
 import { haptics } from '@/services/haptics'
-import { raffsToNaira } from '@/services/rates'
 import { sound } from '@/services/sound'
 import { useAppStore } from '@/store/useAppStore'
 
@@ -35,7 +33,7 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
   const refreshRaffles = useAppStore((s) => s.refreshRaffles)
   const needsPhone = useAppStore((s) => s.features.require_phone_for_entry && !s.profile?.phone)
   const [phoneOpen, setPhoneOpen] = useState(false)
-  const { quote } = useRate()
+  const canRedeem = useAppStore((s) => s.features.vouchers)
   const [qty, setQty] = useState(1)
   const [step, setStep] = useState<Step>('pick')
   const [error, setError] = useState<string | null>(null)
@@ -65,10 +63,9 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
 
   if (!raffle) return null
 
-  // Fixed price in Raffs; the hourly rate only gives the "about ₦" figure
+  // Fixed price in Raffs
   const unit = raffle.entryPriceRaffs
   const totalRaffs = unit * qty
-  const totalNaira = quote ? raffsToNaira(totalRaffs, quote) : null
   const remaining = Math.max(1, raffle.entriesTarget - raffle.entriesCount)
   const max = Math.min(50, remaining)
   const shortBy = Math.max(0, totalRaffs - balance)
@@ -132,7 +129,6 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
               <div className="flex flex-col gap-2 rounded-card bg-white/5 p-4">
                 <Row label="Entries" value={<span className="nums">{qty}</span>} />
                 <Row label="Price per entry" value={<Raffs value={unit} />} />
-                {totalNaira !== null && <Row label="About" value={<span className="nums">{formatNaira(totalNaira)}</span>} />}
                 <div className="my-1 h-px bg-white/10" />
                 <Row label={<span className="font-bold text-cloud">Total</span>} value={<Raffs value={totalRaffs} big />} />
                 <Row label="My balance after" value={<Raffs value={balance - totalRaffs} warn={insufficient} />} />
@@ -141,10 +137,16 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
               {insufficient ? (
                 <div className="flex flex-col gap-2 rounded-card border border-sun/40 bg-sun/10 p-4">
                   <p className="text-[14px] font-bold">You need {formatInt(shortBy)} more Raffs for this entry</p>
-                  <p className="text-[13px] text-mist">Fund your account and come back; this raffle will still be here.</p>
-                  <BouncyButton variant="sun" icon={<Wallet size={18} />} onClick={() => { onClose(); navigate('/wallet') }}>
-                    Fund my account
-                  </BouncyButton>
+                  {canRedeem ? (
+                    <>
+                      <p className="text-[13px] text-mist">Have a voucher code? Redeem it in your wallet and come back; this raffle will still be here.</p>
+                      <BouncyButton variant="sun" icon={<Wallet size={18} />} onClick={() => { onClose(); navigate('/wallet') }}>
+                        Redeem a code
+                      </BouncyButton>
+                    </>
+                  ) : (
+                    <p className="text-[13px] text-mist">Choose fewer entries, or come back when you have more Raffs; this raffle will still be here.</p>
+                  )}
                 </div>
               ) : (
                 <BouncyButton size="lg" block pulse onClick={() => setStep('confirm')}>
@@ -162,7 +164,6 @@ export function EnterRaffleSheet({ raffle, open, onClose }: EnterRaffleSheetProp
                 <p className="mt-3 text-[14px]">
                   <span className="nums font-extrabold">{qty}</span> {qty === 1 ? 'entry' : 'entries'} for{' '}
                   <span className="nums font-extrabold">{formatInt(totalRaffs)} Raffs</span>
-                  {totalNaira !== null && <span className="text-white/70"> (about {formatNaira(totalNaira)})</span>}
                 </p>
                 <p className="mt-1 text-[12px] text-white/70">Entries are final once confirmed. The draw happens at the deadline.</p>
               </div>

@@ -75,7 +75,8 @@ export interface AppState {
   /** idempotencyKey: one per confirmation, reused on retry, so a lost reply never makes a second entry */
   enterRaffle: (raffleId: string, qty: number, idempotencyKey: string, priceRaffs?: number) => Promise<api.EnterRaffleResponse>
   drawRaffle: (raffleId: string) => Promise<{ raffle: Raffle; youWon: boolean }>
-  buyRaffs: (req: Omit<api.BuyRaffsRequest, 'rateId'>) => Promise<api.BuyRaffsResponse>
+  /** Wallet > Redeem a code */
+  redeemVoucher: (code: string) => Promise<api.RedeemVoucherResponse>
   updateProfile: (patch: Partial<Pick<Profile, 'fullName' | 'phone' | 'email' | 'username'>>) => Promise<void>
   updateContactPrefs: (prefs: ContactPrefs) => Promise<void>
   /** Saves the phone from a Telegram contact share (demo: a typed number) */
@@ -292,18 +293,14 @@ export const useAppStore = create<AppState>()(
         return { raffle: res.raffle, youWon: res.youWon }
       },
 
-      async buyRaffs(req) {
-        const { rate } = get()
-        if (!isRateValid(rate)) throw new Error('The rate is refreshing. One moment.')
-        try {
-          const res = await api.buyRaffs({ ...req, rateId: rate.id })
-          set((s) => ({ balance: res.balance, transactions: [res.transaction, ...s.transactions] }))
-          return res
-        } catch (error) {
-          const transactions = await api.getTransactions()
-          set({ transactions })
-          throw error
-        }
+      async redeemVoucher(code) {
+        const res = await api.redeemVoucher(code)
+        set({ balance: res.balance })
+        api.getTransactions().then(
+          (transactions) => set({ transactions }),
+          (error: unknown) => console.warn('[voucher] could not reload transactions after redeeming', error),
+        )
+        return res
       },
 
       async updateProfile(patch) {

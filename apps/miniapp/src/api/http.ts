@@ -25,10 +25,10 @@ import type {
 import type { FeatureMap } from '@raffwin/shared'
 import type { RateQuote } from '@/services/rates'
 import { ApiError } from './errors'
-import type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse, SendRaffsRequest } from './mock'
+import type { EnterRaffleRequest, EnterRaffleResponse, RedeemVoucherResponse, SendRaffsRequest } from './mock'
 import { call, clearSession } from './session'
 
-export type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse, SendRaffsRequest }
+export type { EnterRaffleRequest, EnterRaffleResponse, RedeemVoucherResponse, SendRaffsRequest }
 
 function notYet(what: string): never {
   throw new ApiError('NOT_READY', `${what} is not switched on yet. It arrives with the next release.`)
@@ -147,8 +147,8 @@ export async function drawRaffle(): Promise<{ raffle: Raffle; balance: number; y
 
 /* Wallet --------------------------------------------------------------------- */
 
-export async function buyRaffs(): Promise<BuyRaffsResponse> {
-  return notYet('Buying Raffs with Telegram Stars')
+export function redeemVoucher(code: string): Promise<RedeemVoucherResponse> {
+  return call<RedeemVoucherResponse>('POST', '/v1/vouchers/redeem', { code })
 }
 
 export function getTransactions(): Promise<Transaction[]> {

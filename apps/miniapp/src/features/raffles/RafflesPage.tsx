@@ -3,7 +3,6 @@ import { Hand } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Chip } from '@/components/ui/Chip'
-import { RateChip } from '@/components/ui/RateChip'
 import { useBackButton } from '@/hooks/useBackButton'
 import { useNow } from '@/hooks/useNow'
 import { isEnterable, sortRafflesForDeck } from '@/data/raffleStatus'
@@ -63,7 +62,7 @@ export function RafflesPage() {
         <Chip tone="mint">{live} live</Chip>
       </header>
       <div className="flex items-center justify-between">
-        <RateChip />
+        <span />
         <AnimatePresence>
           {!swipeHintSeen && sorted.length > 1 && (
             <motion.div

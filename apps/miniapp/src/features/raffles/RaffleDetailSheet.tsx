@@ -12,11 +12,9 @@ import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { Sheet } from '@/components/ui/Sheet'
 import { Spinner } from '@/components/ui/Spinner'
 import { useNow } from '@/hooks/useNow'
-import { useRate } from '@/hooks/useRate'
 import { getRaffleStatus, STATUS_LABEL } from '@/data/raffleStatus'
 import type { Raffle } from '@/data/types'
 import { formatDateTime, formatInt, formatNaira, formatRaffs, formatRelative } from '@/services/format'
-import { raffsToNaira } from '@/services/rates'
 import { useAppStore } from '@/store/useAppStore'
 import { DrawReveal } from './DrawReveal'
 import { EnterRaffleSheet } from './EnterRaffleSheet'
@@ -66,7 +64,6 @@ function DrawProof({ raffle }: { raffle: Raffle }) {
 export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, onEnterHandled }: RaffleDetailSheetProps) {
   const [entering, setEntering] = useState(false)
   const now = useNow(1000)
-  const { quote } = useRate()
   const entries = useAppStore((s) => s.entries)
 
   const open = !!raffle
@@ -75,7 +72,6 @@ export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, o
   const myEntries = raffle ? entries.filter((e) => e.raffleId === raffle.id) : []
   const myTickets = myEntries.reduce((sum, e) => sum + e.qty, 0)
   const cost = raffle ? raffle.entryPriceRaffs : null
-  const costNaira = raffle && quote ? raffsToNaira(raffle.entryPriceRaffs, quote) : null
   const showEnter = open && (entering || (enterImmediately && live))
 
   const closeEnter = () => {
@@ -151,7 +147,6 @@ export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, o
                   <p className="text-mist">Entry price</p>
                   <p className="flex items-center gap-1 font-bold">
                     <RaffsCoin size={14} /> <span className="nums">{formatInt(cost ?? 0)}</span>
-                    {costNaira !== null && <span className="text-haze">(about {formatNaira(costNaira)})</span>}
                   </p>
                 </div>
               </div>

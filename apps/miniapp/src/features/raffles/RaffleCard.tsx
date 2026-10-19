@@ -8,12 +8,10 @@ import { ProgressBar } from '@/components/ui/ProgressBar'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { Spinner } from '@/components/ui/Spinner'
 import { useNow } from '@/hooks/useNow'
-import { useRate } from '@/hooks/useRate'
 import { prizeLabel, trophyClass, winnerName, winnersLabel } from '@/data/prizes'
 import { getRaffleStatus, isUrgent, STATUS_LABEL } from '@/data/raffleStatus'
 import type { Raffle } from '@/data/types'
 import { formatDate, formatInt, formatNaira, formatRaffs } from '@/services/format'
-import { raffsToNaira } from '@/services/rates'
 
 interface RaffleCardProps {
   raffle: Raffle
@@ -24,13 +22,11 @@ interface RaffleCardProps {
 /** The ticket. Top: prize on its own gradient. Stub: pool, price, countdown, CTA. */
 export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
   const now = useNow(1000)
-  const { quote } = useRate()
   const status = getRaffleStatus(raffle, now)
   const urgent = isUrgent(raffle, now)
   const progress = raffle.entriesCount / raffle.entriesTarget
-  // Fixed price in Raffs; the quote only gives the "about ₦" hint
+  // Fixed price in Raffs
   const cost = raffle.entryPriceRaffs
-  const costNaira = quote ? raffsToNaira(cost, quote) : null
   const live = status === 'open' || status === 'closing_soon'
 
   const statusTone = { open: 'mint', closing_soon: 'magenta', drawing: 'sun', drawn: 'neutral' } as const
@@ -133,9 +129,6 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
                 <p className="mt-1 flex items-center gap-1.5 text-[16px] font-extrabold">
                   <RaffsCoin size={16} />
                   <span className="nums">{formatInt(cost)}</span>
-                  {costNaira !== null && (
-                    <span className="text-[11px] font-semibold text-haze">(about {formatNaira(costNaira)})</span>
-                  )}
                 </p>
               </div>
               <div className={cn('rounded-2xl p-3', urgent ? 'bg-magenta/15' : 'bg-white/5')}>

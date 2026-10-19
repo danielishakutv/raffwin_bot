@@ -7,7 +7,7 @@ import { env } from '@/services/env'
 import * as http from './http'
 import * as mock from './mock'
 
-export type { BuyRaffsRequest, BuyRaffsResponse, EnterRaffleRequest, EnterRaffleResponse, SendRaffsRequest } from './mock'
+export type { EnterRaffleRequest, EnterRaffleResponse, RedeemVoucherResponse, SendRaffsRequest } from './mock'
 
 /** True when talking to the real API; the UI hides demo-only controls. */
 export const usingRealApi = env.apiUrl !== ''
@@ -35,7 +35,7 @@ export const getRaffles = impl.getRaffles
 export const getRaffle = impl.getRaffle
 export const enterRaffle = impl.enterRaffle
 export const drawRaffle = impl.drawRaffle
-export const buyRaffs = impl.buyRaffs
+export const redeemVoucher = impl.redeemVoucher
 export const getTransactions = impl.getTransactions
 export const getEntries = impl.getEntries
 export const getStreak = impl.getStreak

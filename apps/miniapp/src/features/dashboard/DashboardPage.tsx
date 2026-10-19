@@ -10,16 +10,13 @@ import { cn } from '@/components/ui/cn'
 import { Countdown } from '@/components/ui/Countdown'
 import { PrizeVisual } from '@/components/ui/PrizeVisual'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
-import { RateChip } from '@/components/ui/RateChip'
 import { Sparkline } from '@/components/ui/Sparkline'
 import { useNow } from '@/hooks/useNow'
-import { useRate } from '@/hooks/useRate'
 import { getRaffleStatus, isEnterable, isUrgent } from '@/data/raffleStatus'
 import { PhoneSheet } from '@/features/phone/PhoneShare'
 import { StreakCard } from '@/features/streak/StreakCard'
 import { formatNaira } from '@/services/format'
 import { haptics } from '@/services/haptics'
-import { raffsToNaira } from '@/services/rates'
 import { sound } from '@/services/sound'
 import { useAppStore, useMyWins } from '@/store/useAppStore'
 
@@ -40,7 +37,6 @@ export function DashboardPage() {
   const wins = useMyWins()
   const muted = useAppStore((s) => s.settings.muted)
   const setMuted = useAppStore((s) => s.setMuted)
-  const { quote } = useRate()
   const now = useNow(30000)
   const [phoneOpen, setPhoneOpen] = useState(false)
 
@@ -80,7 +76,6 @@ export function DashboardPage() {
 
   if (!profile) return null
   const hour = new Date(now).getHours()
-  const balanceNaira = quote ? raffsToNaira(balance, quote) : null
 
   return (
     <motion.div variants={staggerContainer} initial="hidden" animate="show" className="flex flex-col gap-4">
@@ -119,15 +114,11 @@ export function DashboardPage() {
               <RaffsCoin size={30} />
               <AnimatedNumber value={balance} className="text-[40px] font-extrabold leading-none text-white" />
             </div>
-            <p className="mt-2 h-5 text-[13px] font-semibold text-white/80">
-              {balanceNaira !== null ? `about ${formatNaira(balanceNaira)} at the current rate` : 'Refreshing rate'}
-            </p>
           </div>
-          <RateChip className="shrink-0 border-white/30 bg-white/15 text-white" />
         </div>
         <div className="relative mt-5 flex flex-col gap-2 min-[380px]:flex-row">
           <BouncyButton variant="sun" size="md" icon={<Wallet size={18} />} onClick={() => navigate('/wallet')} className="flex-1">
-            Fund my account
+            My wallet
           </BouncyButton>
           <BouncyButton
             variant="outline"
