@@ -1,10 +1,12 @@
 /**
  * Raffle management: a filterable list of every raffle, and the editor.
  * Drafts are invisible to players until published; publishing, unpublishing
- * and cancelling all happen from the list.
+ * and cancelling all happen from the list. "Run again" copies any raffle,
+ * whatever its status, into a new draft and opens it in the editor; the
+ * original is never changed.
  */
 import { useMemo, useState } from 'react'
-import { CalendarClock, Pencil, Plus, Search, Send, Undo2, XCircle } from 'lucide-react'
+import { CalendarClock, Copy, Pencil, Plus, Repeat, Search, Send, Undo2, XCircle } from 'lucide-react'
 import type { AdminApproval, AdminRaffle } from '@raffwin/shared/admin-types'
 import { prizeLabel } from '@raffwin/shared'
 import { PrizeVisual } from '@/components/ui/PrizeVisual'
@@ -89,6 +91,18 @@ export function RafflesTab({ can, superAdmin, onScrollTop }: { can: string[]; su
     if (done) setMsg(`Unpublished: ${done.prizeName} is a draft again.`)
     reload()
   }
+  const runAgain = async (r: AdminRaffle) => {
+    const ok = await askConfirm(
+      `Run "${r.prizeName}" again? A new draft is made with the same prize, photo, prices, prizes and rules, and opened for you to edit. The original stays exactly as it is.`,
+      'Make the new draft',
+    )
+    if (!ok) return
+    const copy = await action.run(() => adminCall<AdminRaffle>('POST', `/raffles/${r.id}/copy`))
+    if (!copy) return
+    reload()
+    // Straight into the editor: check the deadline and anything else, save, then publish from the list
+    open(copy)
+  }
   const cancel = async (r: AdminRaffle) => {
     const reason = await askText(
       superAdmin ? `Cancel "${r.prizeName}"? Every entry is refunded at once. Why?` : 'Why cancel? Every entry is refunded once a second admin approves.',
@@ -150,9 +164,11 @@ export function RafflesTab({ can, superAdmin, onScrollTop }: { can: string[]; su
                 canPublish={write && r.status === 'draft'}
                 canUnpublish={write && r.status === 'open' && r.entriesCount === 0}
                 canCancel={(r.status === 'open' || r.status === 'draft') && can.includes('raffles.cancel.request')}
+                canRunAgain={write}
                 superAdmin={superAdmin}
                 busy={action.busy}
                 onEdit={() => open(r)}
+                onRunAgain={() => void runAgain(r)}
                 onPublish={() => void publish(r)}
                 onUnpublish={() => void unpublish(r)}
                 onCancel={() => void cancel(r)}
@@ -171,24 +187,28 @@ function RaffleItem({
   canPublish,
   canUnpublish,
   canCancel,
+  canRunAgain,
   superAdmin,
   busy,
   onEdit,
   onPublish,
   onUnpublish,
   onCancel,
+  onRunAgain,
 }: {
   r: AdminRaffle
   canEdit: boolean
   canPublish: boolean
   canUnpublish: boolean
   canCancel: boolean
+  canRunAgain: boolean
   superAdmin: boolean
   busy: boolean
   onEdit: () => void
   onPublish: () => void
   onUnpublish: () => void
   onCancel: () => void
+  onRunAgain: () => void
 }) {
   const total = r.prizes.length
   const live = r.status === 'open' || r.status === 'draft'
@@ -208,6 +228,11 @@ function RaffleItem({
           </div>
           <h3 className="mt-1 break-words text-[15px] font-bold leading-snug">{r.prizeName}</h3>
           {r.model && <p className="truncate text-[12px] text-neutral-600">{r.model}</p>}
+          {r.copiedFrom && (
+            <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11.5px] text-neutral-500">
+              <Copy size={11} className="shrink-0" /> <span className="truncate">Run again from {r.copiedFrom.prizeName}</span>
+            </p>
+          )}
         </div>
       </div>
 
@@ -246,7 +271,7 @@ function RaffleItem({
         </div>
       </div>
 
-      {(canEdit || canPublish || canUnpublish || canCancel) && (
+      {(canEdit || canPublish || canUnpublish || canCancel || canRunAgain) && (
         <div className="mt-auto flex flex-wrap gap-2 border-t border-black/10 p-3">
           {canPublish && (
             <Button size="sm" variant="solid" icon={<Send size={14} />} disabled={busy} onClick={onPublish}>
@@ -261,6 +286,11 @@ function RaffleItem({
           {canUnpublish && (
             <Button size="sm" variant="ghost" icon={<Undo2 size={14} />} disabled={busy} onClick={onUnpublish}>
               Unpublish
+            </Button>
+          )}
+          {canRunAgain && (
+            <Button size="sm" variant="ghost" icon={<Repeat size={14} />} disabled={busy} onClick={onRunAgain}>
+              Run again
             </Button>
           )}
           {canCancel && (

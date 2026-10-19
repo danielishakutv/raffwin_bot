@@ -279,13 +279,13 @@ const OPT_OUT_KINDS: ReadonlySet<NotificationKind> = new Set(['reminder', 'comeb
 /** The same nudges never arrive in quiet hours, even when a backlog or a 429 pause carries them there */
 const QUIET_HOURS_KINDS = OPT_OUT_KINDS
 /**
- * Claim order when more is due than one pass takes: a player's own transfer
- * or win first, then reminders and offers, then broadcasts; oldest first within each.
+ * Claim order when more is due than one pass takes: a player's own transfer,
+ * win or credit first, then reminders and offers, then broadcasts; oldest first within each.
  * A 50,000-player announcement must not hold a transfer back for minutes.
  */
-const KIND_RANK = sql`case ${notifications.kind} when 'transfer' then 0 when 'raffle_won' then 0 when 'comeback' then 1 when 'reminder' then 1 else 2 end`
+const KIND_RANK = sql`case ${notifications.kind} when 'transfer' then 0 when 'raffle_won' then 0 when 'credit' then 0 when 'comeback' then 1 when 'reminder' then 1 else 2 end`
 function kindRank(kind: NotificationKind): number {
-  return kind === 'transfer' || kind === 'raffle_won' ? 0 : kind === 'comeback' || kind === 'reminder' ? 1 : 2
+  return kind === 'transfer' || kind === 'raffle_won' || kind === 'credit' ? 0 : kind === 'comeback' || kind === 'reminder' ? 1 : 2
 }
 
 /**

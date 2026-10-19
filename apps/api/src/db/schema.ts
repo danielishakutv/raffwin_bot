@@ -290,6 +290,8 @@ export const raffles = pgTable(
     drawnAt: timestamp('drawn_at', { withTimezone: true }),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
     createdByAdminId: uuid('created_by_admin_id'),
+    /** "Run again": the raffle this draft was copied from (which itself never changes) */
+    copiedFromRaffleId: uuid('copied_from_raffle_id').references((): AnyPgColumn => raffles.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -713,6 +715,8 @@ export const NOTIFICATION_KINDS = [
   'raffle_drawn',
   /** A winner's own message */
   'raffle_won',
+  /** Raffs credited by an admin (an approved or direct balance adjustment) */
+  'credit',
   'transfer',
   'system',
 ] as const

@@ -97,6 +97,8 @@ export interface AdminRaffle {
   rules: string[]
   prizes: AdminPrize[]
   seedCommitment: string | null
+  /** "Run again": the raffle this one was copied from */
+  copiedFrom: { id: string; prizeName: string } | null
   openedAt: string | null
   drawnAt: string | null
   cancelledAt: string | null
@@ -206,6 +208,7 @@ export type NotificationKind =
   | 'raffle_cancelled'
   | 'raffle_drawn'
   | 'raffle_won'
+  | 'credit'
   | 'transfer'
   | 'system'
 

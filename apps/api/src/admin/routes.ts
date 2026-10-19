@@ -195,6 +195,10 @@ export function adminRoutes(ctx: AppContext): Router {
     res.set({ 'Content-Type': image.mime, 'Content-Length': String(image.bytes.length), 'Content-Security-Policy': "default-src 'none'; sandbox" })
     res.end(image.bytes)
   })
+  // "Run again": a new draft copied from any raffle; the original stays as it is
+  r.post('/raffles/:id/copy', authed, perm('raffles.write'), async (req, res) => {
+    res.status(201).json(await ops.copyRaffle(ctx, adminId(req), idParam(req)))
+  })
   r.post('/raffles/:id/open', authed, perm('raffles.write'), async (req, res) => {
     res.json(await ops.openRaffle(ctx, adminId(req), idParam(req)))
   })

@@ -108,7 +108,8 @@ function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string
   const adjust = async () => {
     const raffs = Number((await askText('Raffs to credit (negative to debit)', { placeholder: 'e.g. 500 or -200' })) ?? '')
     if (!Number.isInteger(raffs) || raffs === 0) return
-    const reason = await askText(superAdmin ? 'Why? It happens at once and is recorded.' : 'Why? A second admin approves before it happens.')
+    const told = raffs > 0 ? ' The player gets a bot message when the Raffs land.' : ''
+    const reason = await askText(superAdmin ? `Why? It happens at once and is recorded.${told}` : `Why? A second admin approves before it happens.${told}`)
     if (reason)
       void action.run(() => adminCall<AdminApproval>('POST', `/users/${id}/adjust`, { raffs, reason })).then((a) => {
         if (!a) return

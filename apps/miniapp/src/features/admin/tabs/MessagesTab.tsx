@@ -341,6 +341,7 @@ const KINDS: { value: '' | NotificationKind; label: string }[] = [
   { value: 'raffle_drawn', label: 'Winners announced' },
   { value: 'raffle_won', label: 'Winner messages' },
   { value: 'transfer', label: 'Raffs received' },
+  { value: 'credit', label: 'Admin credits' },
   { value: 'system', label: 'System' },
 ]
 type Status = '' | AdminNotification['status']

@@ -10,6 +10,7 @@ import type { AppContext } from '../context'
 import { adminUsers, approvals, APPROVAL_ACTIONS, entries, raffles, referralEarnings, users } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { post, type Tx } from '../services/ledger'
+import { enqueue, openAppButton } from '../services/notify'
 import { putSetting } from '../services/settings'
 import { appendAudit } from './audit'
 import { announceRaffleCancelled } from './messages'
@@ -94,7 +95,7 @@ export async function executeDirect<A extends Action>(
   let id: string
   try {
     id = await ctx.db.transaction(async (tx) => {
-      const result = await execute(tx, action, payload as never, adminId, new Date(ctx.now()))
+      const result = await execute(ctx, tx, action, payload as never, adminId, new Date(ctx.now()))
       const [row] = await tx
         .insert(approvals)
         .values({
@@ -188,7 +189,7 @@ export async function decide(
       if (a.requestedByAdminId === deciderId) {
         throw new HttpError('FORBIDDEN', 'A second admin has to decide this; you asked for it.')
       }
-      const result = verdict === 'approve' ? await execute(tx, a.action, a.payload as never, deciderId, new Date(ctx.now()), a.reason) : null
+      const result = verdict === 'approve' ? await execute(ctx, tx, a.action, a.payload as never, deciderId, new Date(ctx.now()), a.reason) : null
       decided = { action: a.action, payload: a.payload as Record<string, unknown>, approved: verdict === 'approve' }
       await tx
         .update(approvals)
@@ -223,7 +224,15 @@ export async function decide(
   return (await listApprovals(ctx, { id: approvalId }))[0] as AdminApproval
 }
 
-async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminId: string, at: Date, reason = ''): Promise<Record<string, unknown>> {
+async function execute(
+  ctx: AppContext,
+  tx: Tx,
+  action: Action,
+  payload: Payloads[Action],
+  adminId: string,
+  at: Date,
+  reason = '',
+): Promise<Record<string, unknown>> {
   switch (action) {
     case 'rate_base_change': {
       const p = payload as Payloads['rate_base_change']
@@ -233,7 +242,7 @@ async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminI
     }
     case 'balance_adjustment': {
       const p = payload as Payloads['balance_adjustment']
-      const [u] = await tx.select({ id: users.id }).from(users).where(eq(users.id, p.userId)).for('update')
+      const [u] = await tx.select({ id: users.id, telegramId: users.telegramId }).from(users).where(eq(users.id, p.userId)).for('update')
       if (!u) throw new Error('user no longer exists')
       const row = await post(tx, {
         userId: p.userId,
@@ -242,7 +251,9 @@ async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminI
         note: p.raffs > 0 ? 'Credit from Raffle Win support' : 'Correction by Raffle Win support',
         referenceType: 'approval',
       })
-      return { ledgerId: row.id, balanceAfter: row.balanceAfter }
+      // A credit is announced by the bot, queued with the credit itself so one never lands without the other
+      const told = p.raffs > 0 ? await tellCredit(ctx, tx, u, p.raffs, row.id, row.balanceAfter) : false
+      return { ledgerId: row.id, balanceAfter: row.balanceAfter, playerTold: told }
     }
     case 'raffle_cancel': {
       const p = payload as Payloads['raffle_cancel']
@@ -254,6 +265,21 @@ async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminI
       return applyRisk(tx, action, p.adminId, reason, at)
     }
   }
+}
+
+/** "You received 500 Raffs from Raffle Win", to the player's bot chat (sent by the outbox). */
+async function tellCredit(ctx: AppContext, tx: Tx, user: { id: string; telegramId: number }, raffs: number, ledgerId: string, balance: number): Promise<boolean> {
+  const amount = `${raffs.toLocaleString('en-NG')} ${raffs === 1 ? 'Raff' : 'Raffs'}`
+  const button = openAppButton(ctx, 'Open my wallet', 'wallet')
+  const queued = await enqueue(tx, {
+    userId: user.id,
+    telegramId: user.telegramId,
+    kind: 'credit',
+    text: `<b>You received ${amount} from Raffle Win</b>\n\nThey are already in your balance, which is now ${balance.toLocaleString('en-NG')} Raffs. Use them to enter a raffle.`,
+    buttons: button ? [[button]] : null,
+    dedupeKey: `credit:${ledgerId}`,
+  })
+  return queued === 'queued'
 }
 
 /**

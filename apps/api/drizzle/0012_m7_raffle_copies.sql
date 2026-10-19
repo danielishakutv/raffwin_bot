@@ -1,0 +1,2 @@
+ALTER TABLE "raffles" ADD COLUMN "copied_from_raffle_id" uuid;--> statement-breakpoint
+ALTER TABLE "raffles" ADD CONSTRAINT "raffles_copied_from_raffle_id_raffles_id_fk" FOREIGN KEY ("copied_from_raffle_id") REFERENCES "raffles"("id") ON DELETE no action ON UPDATE no action;

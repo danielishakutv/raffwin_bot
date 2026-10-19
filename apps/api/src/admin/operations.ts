@@ -54,6 +54,13 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
     .leftJoin(users, eq(users.id, rafflePrizes.winnerUserId))
     .where(inArray(rafflePrizes.raffleId, rows.map((r) => r.id)))
     .orderBy(asc(rafflePrizes.position))
+  // Names of the raffles these were copied from ("Run again")
+  const sourceIds = [...new Set(rows.map((r) => r.copiedFromRaffleId).filter((x): x is string => !!x))]
+  const sources = new Map(
+    sourceIds.length
+      ? (await ctx.db.select({ id: raffles.id, prizeName: raffles.prizeName }).from(raffles).where(inArray(raffles.id, sourceIds))).map((s) => [s.id, s.prizeName])
+      : [],
+  )
   return rows.map((r) => ({
     id: r.id,
     slug: r.slug,
@@ -86,6 +93,7 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
         winnerTicket: x.p.winnerTicket,
       })),
     seedCommitment: r.seedCommitment,
+    copiedFrom: r.copiedFromRaffleId ? { id: r.copiedFromRaffleId, prizeName: sources.get(r.copiedFromRaffleId) ?? '' } : null,
     openedAt: r.openedAt?.toISOString() ?? null,
     drawnAt: r.drawnAt?.toISOString() ?? null,
     cancelledAt: r.cancelledAt?.toISOString() ?? null,
@@ -128,6 +136,52 @@ export async function createRaffle(ctx: AppContext, adminId: string | null, body
     if (!row) throw new Error('raffle insert returned no row')
     await tx.insert(rafflePrizes).values(prizes.map((p) => ({ ...p, raffleId: row.id })))
     await appendAudit(tx, { adminId, action: 'raffle.create', targetType: 'raffle', targetId: row.id, after: body })
+    return row.id
+  })
+  return getRaffle(ctx, id)
+}
+
+/**
+ * "Run again": a new draft with everything players see copied from another
+ * raffle (any status), its prizes without winners, no entries, a fresh seed at
+ * publishing, and a deadline as far ahead as the original ran (1 to 30 days,
+ * on the hour). The original is not touched. Edit the draft, then publish it.
+ */
+export async function copyRaffle(ctx: AppContext, adminId: string | null, sourceId: string): Promise<AdminRaffle> {
+  const id = await ctx.db.transaction(async (tx) => {
+    const [src] = await tx.select().from(raffles).where(eq(raffles.id, sourceId))
+    if (!src) throw new HttpError('NOT_FOUND', 'No such raffle.')
+    const prizes = await tx.select().from(rafflePrizes).where(eq(rafflePrizes.raffleId, sourceId)).orderBy(asc(rafflePrizes.position))
+    const ran = src.deadline.getTime() - (src.openedAt ?? src.createdAt).getTime()
+    const span = Math.min(30 * 86_400_000, Math.max(86_400_000, ran))
+    const deadline = new Date(Math.ceil((ctx.now() + span) / 3_600_000) * 3_600_000)
+    const [row] = await tx
+      .insert(raffles)
+      .values({
+        slug: slugify(src.prizeName),
+        prizeName: src.prizeName,
+        model: src.model,
+        category: src.category,
+        kind: src.kind,
+        hue: src.hue,
+        imageUrl: src.imageUrl,
+        marketPriceNaira: src.marketPriceNaira,
+        entryPriceRaffs: src.entryPriceRaffs,
+        entriesTarget: src.entriesTarget,
+        deadline,
+        description: src.description,
+        rules: src.rules,
+        createdByAdminId: adminId,
+        copiedFromRaffleId: src.id,
+      })
+      .returning({ id: raffles.id })
+    if (!row) throw new Error('raffle insert returned no row')
+    if (prizes.length) {
+      await tx.insert(rafflePrizes).values(
+        prizes.map((p) => ({ raffleId: row.id, position: p.position, prizeItem: p.prizeItem, prizeType: p.prizeType, raffsValue: p.raffsValue, costNaira: p.costNaira })),
+      )
+    }
+    await appendAudit(tx, { adminId, action: 'raffle.copy', targetType: 'raffle', targetId: row.id, after: { copiedFrom: src.id, sourceStatus: src.status, deadline } })
     return row.id
   })
   return getRaffle(ctx, id)
