@@ -15,8 +15,12 @@ export interface WinnerSlot {
   position: number
   /** What this position wins, e.g. "Samsung Galaxy A15" or "₦20,000 airtime" */
   prizeItem: string
-  /** Winner username without @, or null while the draw is pending ("TBD") */
+  /** Winner username without @, or null while the draw is pending ("TBD") or when the winner has none */
   username: string | null
+  /** How the winner is shown: "@username", or a first name for a player without one; null before the draw */
+  name: string | null
+  /** The winning ticket number; null before the draw */
+  ticket: number | null
 }
 
 export interface Raffle {
@@ -45,8 +49,10 @@ export interface Raffle {
   winners: WinnerSlot[]
   /** ISO timestamp once the draw has completed, otherwise null */
   drawnAt: string | null
-  /** SHA-256 of the draw seed, published while entries are open (milestone 4) */
+  /** SHA-256 of the draw seed, published while entries are open */
   seedCommitment: string | null
+  /** The seed itself, published once the raffle is drawn so anyone can re-run the draw */
+  drawSeed: string | null
   /** Recent entrants' usernames, for the draw reveal animation */
   entrants: string[]
 }

@@ -15,7 +15,7 @@ import { PhoneSheet } from '@/features/phone/PhoneShare'
 import { SectionCard } from './SectionCard'
 import { BotMessagesSection, ContactSection, DemoControls, PersonalInfoSection } from './sections'
 import { cn } from '@/components/ui/cn'
-import { useAdminSession } from '@/features/admin/adminSession'
+import { hasTrustedDevice, signInWithDevice, useAdminSession } from '@/features/admin/adminSession'
 
 /** Profile hub: identity, address, verification, contact, history links, settings. */
 export function ProfilePage() {
@@ -132,15 +132,42 @@ export function ProfilePage() {
 }
 
 /**
- * Shown to admin accounts only. It opens nothing by itself: the admin screen
- * needs a sign-in through the bot (hidden command, master password, username,
- * password), which returns an "Open admin" button.
+ * Shown to admin accounts only. On a trusted device (one full sign-in done
+ * here before) one tap opens the admin. Otherwise it opens nothing by itself:
+ * the admin screen needs a sign-in through the bot (master password, username,
+ * password), which returns an "Open admin" button and trusts this device.
  */
 function AdminEntry() {
   const navigate = useNavigate()
   const unlocked = useAdminSession((s) => s.token !== null)
   const [state, setState] = useState<'idle' | 'busy' | 'sent'>('idle')
   const [error, setError] = useState<string | null>(null)
+  const [trusted, setTrusted] = useState(false)
+  const [opening, setOpening] = useState(false)
+  useEffect(() => {
+    let alive = true
+    hasTrustedDevice().then(
+      (t) => alive && setTrusted(t),
+      (e: unknown) => console.warn('[admin] could not check for a trusted device', e),
+    )
+    return () => {
+      alive = false
+    }
+  }, [])
+  const openTrusted = async () => {
+    setOpening(true)
+    setError(null)
+    try {
+      if (await signInWithDevice()) navigate('/admin')
+      else setTrusted(false)
+    } catch (e) {
+      // The API no longer trusts this device (it was forgotten here): the full sign-in is next
+      setError(errorMessage(e))
+      setTrusted(false)
+    } finally {
+      setOpening(false)
+    }
+  }
   const start = async () => {
     setState('busy')
     setError(null)
@@ -161,11 +188,20 @@ function AdminEntry() {
         <button type="button" onClick={() => navigate('/admin')} className="mt-2 w-full rounded-lg bg-black py-2.5 text-[14px] font-bold text-white">
           Open the admin screen
         </button>
+      ) : trusted ? (
+        <>
+          <p className="mt-1 text-[13px]">This device is trusted for your admin account.</p>
+          <button type="button" disabled={opening} onClick={() => void openTrusted()} className="mt-2 w-full rounded-lg bg-black py-2.5 text-[14px] font-bold text-white disabled:opacity-50">
+            {opening ? 'Opening...' : 'Open the admin'}
+          </button>
+        </>
       ) : state === 'sent' ? (
         <p className="mt-1 text-[13px]">The bot has messaged you. Answer it in the chat with the master password, your admin username and your password. It then sends an Open admin button.</p>
       ) : (
         <>
-          <p className="mt-1 text-[13px]">Locked. Signing in happens in the bot chat and needs the master password, your admin username and password.</p>
+          <p className="mt-1 text-[13px]">
+            Locked. Signing in happens in the bot chat and needs the master password, your admin username and password. After that, this device is trusted and one tap opens the admin.
+          </p>
           <button type="button" disabled={state === 'busy'} onClick={() => void start()} className="mt-2 w-full rounded-lg bg-black py-2.5 text-[14px] font-bold text-white disabled:opacity-50">
             {state === 'busy' ? 'Asking the bot...' : 'Start admin sign-in'}
           </button>

@@ -111,16 +111,20 @@ export const expenseBody = z.object({
 /* Browser (desktop) sign-in --------------------------------------------------- */
 
 /** POST /admin/v1/auth/web/start: the same secrets as the bot sign-in */
+// Secrets are trimmed, as the bot sign-in trims what it reads: a space picked up
+// by copy and paste or a phone keyboard must not make a right password wrong
 export const webLoginStartBody = z.object({
-  master: z.string().min(1).max(200),
+  master: z.string().trim().min(1).max(200),
   username: z.string().trim().min(1).max(64),
-  password: z.string().min(1).max(200),
+  password: z.string().trim().min(1).max(200),
 })
 
 /** POST /admin/v1/auth/web/verify: the code the bot sent to the admin's Telegram */
 export const webLoginVerifyBody = z.object({
   challengeId: z.string().uuid(),
   code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code from the bot'),
+  /** Trust this browser from now on: next time only the admin password is asked (admin/devices.ts) */
+  rememberDevice: z.boolean().optional().default(false),
 })
 
 /* Features -------------------------------------------------------------------- */

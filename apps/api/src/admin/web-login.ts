@@ -43,6 +43,7 @@ import { HttpError } from '../lib/http-error'
 import { requestMeta } from '../http/middleware'
 import type { Tx } from '../services/ledger'
 import { appendAudit } from './audit'
+import { registerDevice } from './devices'
 import { hashPassword, openSession, verifyPassword, type AdminLogin } from './session'
 
 export const CODE_MINUTES = 5
@@ -426,7 +427,7 @@ export async function startWebLogin(ctx: AppContext, req: Request): Promise<Admi
 }
 
 type VerifyOutcome =
-  | { kind: 'ok'; admin: AdminUserRow; token: string; expiresAt: number }
+  | { kind: 'ok'; admin: AdminUserRow; token: string; expiresAt: number; deviceToken: string | null }
   | { kind: 'ip_limited' }
   | { kind: 'wrong_code'; adminId: string; attemptsLeft: number; lockedOut: boolean }
   | { kind: 'unknown' | 'used' | 'expired' | 'burned' | 'admin_unavailable' | 'code_locked'; adminId: string | null }
@@ -444,7 +445,7 @@ export async function verifyWebLogin(ctx: AppContext, req: Request): Promise<Adm
       await webEvent(ctx, tx, meta, 'admin_web_rate_limited', 'high', { step: 'verify' })
       return { kind: 'ip_limited' }
     }
-    const outcome = await checkCode(ctx, tx, meta, body.challengeId, body.code, now)
+    const outcome = await checkCode(ctx, tx, meta, body.challengeId, body.code, now, body.rememberDevice)
     if (outcome.kind === 'ok') return outcome
     const details = {
       challengeId: body.challengeId,
@@ -456,7 +457,7 @@ export async function verifyWebLogin(ctx: AppContext, req: Request): Promise<Adm
     return outcome
   })
 
-  if (result.kind === 'ok') return { admin: result.admin, token: result.token, expiresAt: result.expiresAt }
+  if (result.kind === 'ok') return { admin: result.admin, token: result.token, expiresAt: result.expiresAt, deviceToken: result.deviceToken }
   if (result.kind === 'ip_limited') {
     await auditWeb(ctx, { adminId: null, action: 'admin.web.failed', details: { step: 'verify', reason: 'ip_rate_limited' }, ipHash: meta.ipHash })
     throw new HttpError('RATE_LIMITED', IP_LIMITED)
@@ -483,6 +484,7 @@ async function checkCode(
   challengeId: string,
   code: string,
   now: number,
+  rememberDevice: boolean,
 ): Promise<Exclude<VerifyOutcome, { kind: 'ip_limited' }>> {
   // The admin's username lock too, so starts and verifies for one admin count each other's codes
   const [owner] = await tx
@@ -517,12 +519,14 @@ async function checkCode(
   if (!admin || admin.status !== 'active' || admin.telegramId === null) return { kind: 'admin_unavailable', adminId: c.adminId }
   await tx.update(adminWebLogins).set({ usedAt: new Date(now) }).where(eq(adminWebLogins.id, c.id))
   await tx.update(adminUsers).set({ lastLoginAt: new Date(now), failedLogins: 0, updatedAt: sql`now()` }).where(eq(adminUsers.id, admin.id))
+  const device = rememberDevice ? await registerDevice(ctx, tx, { admin, channel: 'browser', userAgent: meta.userAgent, ipHash: meta.ipHash }) : null
   const session = await openSession(ctx, tx, {
     admin,
     channel: 'browser',
+    deviceId: device?.deviceId ?? null,
     ipHash: meta.ipHash,
     userAgent: meta.userAgent,
-    auditAfter: { channel: 'browser', challengeId: c.id },
+    auditAfter: { channel: 'browser', challengeId: c.id, deviceTrusted: !!device },
   })
-  return { kind: 'ok', admin, ...session }
+  return { kind: 'ok', admin, ...session, deviceToken: device?.token ?? null }
 }

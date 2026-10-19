@@ -281,6 +281,11 @@ export const raffles = pgTable(
     rules: jsonb('rules').$type<string[]>().notNull().default([]),
     /** sha256 of the secret seed, published when the raffle opens (milestone 4) */
     seedCommitment: text('seed_commitment'),
+    /**
+     * The secret seed behind seed_commitment (32 random bytes, hex). Never shown
+     * before the draw; published with the winners so anyone can re-run it.
+     */
+    drawSeed: text('draw_seed'),
     openedAt: timestamp('opened_at', { withTimezone: true }),
     drawnAt: timestamp('drawn_at', { withTimezone: true }),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
@@ -445,6 +450,13 @@ export const adminUsers = pgTable(
     failedLogins: integer('failed_logins').notNull().default(0),
     lockedUntil: timestamp('locked_until', { withTimezone: true }),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+    /**
+     * Marked at risk by two other admins (approval admin_risk_flag). While set,
+     * trusted devices do not work and every sign-in takes the full checks;
+     * cleared the same way (admin_risk_clear).
+     */
+    riskFlaggedAt: timestamp('risk_flagged_at', { withTimezone: true }),
+    riskReason: text('risk_reason'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -471,6 +483,8 @@ export const adminSessions = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     /** telegram: the bot's Open admin button; browser: desktop sign-in with a code from the bot */
     channel: text('channel', { enum: ['telegram', 'browser'] }).notNull().default('telegram'),
+    /** The trusted device that opened it (admin_devices); null = a full sign-in. Revoking the device ends it. */
+    deviceId: uuid('device_id'),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('admin_sessions_token_key').on(t.tokenHash), index('admin_sessions_admin_idx').on(t.adminId)],
@@ -540,7 +554,7 @@ export const auditLog = pgTable(
   (t) => [uniqueIndex('audit_log_seq_key').on(t.seq), index('audit_log_target_idx').on(t.targetType, t.targetId)],
 )
 
-export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel'] as const
+export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel', 'admin_risk_flag', 'admin_risk_clear'] as const
 
 /** Maker-checker: a sensitive action runs only when a second admin approves it. */
 export const approvals = pgTable(
@@ -655,7 +669,7 @@ export const featureFlagOverrides = pgTable(
   ],
 )
 
-export const BROADCAST_KINDS = ['announcement', 'feature', 'raffle_new', 'raffle_cancelled'] as const
+export const BROADCAST_KINDS = ['announcement', 'feature', 'raffle_new', 'raffle_cancelled', 'raffle_drawn'] as const
 
 /**
  * One message to many players. Created by an admin (notice, announcement), by
@@ -695,6 +709,10 @@ export const NOTIFICATION_KINDS = [
   'feature',
   'raffle_new',
   'raffle_cancelled',
+  /** Winners announced: to the raffle's entrants and to players with new-raffle alerts on */
+  'raffle_drawn',
+  /** A winner's own message */
+  'raffle_won',
   'transfer',
   'system',
 ] as const
@@ -830,6 +848,40 @@ export const raffsTransfers = pgTable(
  * password are accepted, a 6-digit code goes to the admin's bound Telegram
  * account through the bot. Five wrong codes or five minutes end the challenge.
  */
+/**
+ * Trusted devices (decision of 19 Oct): the full sign-in (master password,
+ * username, password, and the bot's code or ticket) is needed on a device
+ * the first time only. It then registers the device, which holds a random
+ * secret (sha256 stored here). From then on:
+ *   telegram: the bound Telegram account opening the Mini App on that device
+ *             signs in with one tap (initData + device secret);
+ *   browser:  the device secret plus the admin's own password.
+ * Revoked by the admin (Settings), by a password reset, and all at once when
+ * two admins mark the account at risk.
+ */
+export const adminDevices = pgTable(
+  'admin_devices',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    adminId: uuid('admin_id')
+      .notNull()
+      .references(() => adminUsers.id),
+    channel: text('channel', { enum: ['telegram', 'browser'] }).notNull(),
+    secretHash: text('secret_hash').notNull(),
+    /** What the admin sees in the device list, e.g. "Telegram (ios)" or a browser name */
+    label: text('label').notNull(),
+    userAgent: text('user_agent'),
+    ipHash: text('ip_hash'),
+    /** Wrong admin passwords in a row on this browser device; 5 revoke it */
+    failedCount: integer('failed_count').notNull().default(0),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedReason: text('revoked_reason'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('admin_devices_secret_key').on(t.secretHash), index('admin_devices_admin_idx').on(t.adminId, t.createdAt)],
+)
+
 export const adminWebLogins = pgTable(
   'admin_web_logins',
   {
@@ -856,3 +908,4 @@ export type RafflePrizeRow = typeof rafflePrizes.$inferSelect
 export type EntryRow = typeof entries.$inferSelect
 export type LedgerRow = typeof ledger.$inferSelect
 export type AdminUserRow = typeof adminUsers.$inferSelect
+export type AdminDeviceRow = typeof adminDevices.$inferSelect

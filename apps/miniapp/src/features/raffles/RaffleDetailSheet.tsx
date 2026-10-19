@@ -1,5 +1,6 @@
-import { Clock, ShieldCheck, Ticket, Trophy, Users } from 'lucide-react'
+import { Clock, Fingerprint, ShieldCheck, Ticket, Trophy, Users } from 'lucide-react'
 import { useState } from 'react'
+import { DRAW_METHOD, minEntriesToDraw } from '@raffwin/shared'
 import { BouncyButton } from '@/components/ui/BouncyButton'
 import { Chip } from '@/components/ui/Chip'
 import { cn } from '@/components/ui/cn'
@@ -26,6 +27,39 @@ interface RaffleDetailSheetProps {
   /** Open the enter flow immediately (from the card's Enter button) */
   enterImmediately?: boolean
   onEnterHandled?: () => void
+}
+
+/** How anyone can check the draw: the seed's fingerprint before it, the seed and winning tickets after. */
+function DrawProof({ raffle }: { raffle: Raffle }) {
+  const tickets = [...raffle.winners].sort((a, b) => a.position - b.position).map((w) => w.ticket)
+  return (
+    <section>
+      <h4 className="flex items-center gap-2 text-[15px] font-bold">
+        <Fingerprint size={16} className="text-electric-2" /> Check this draw
+      </h4>
+      <div className="mt-2 flex flex-col gap-2 rounded-card bg-white/5 p-4 text-[12px] leading-5 text-mist">
+        <p>
+          Seed fingerprint (SHA-256), fixed when the raffle opened:
+          <code className="mt-0.5 block break-all font-mono text-[11px] text-cloud">{raffle.seedCommitment}</code>
+        </p>
+        {raffle.drawSeed ? (
+          <>
+            <p>
+              Seed, published with the winners:
+              <code className="mt-0.5 block break-all font-mono text-[11px] text-cloud">{raffle.drawSeed}</code>
+            </p>
+            <p>
+              Raffle id <code className="break-all font-mono text-[11px] text-cloud">{raffle.id}</code>, {formatInt(raffle.entriesCount)} tickets sold, winning tickets{' '}
+              <span className="nums font-bold text-cloud">{tickets.map((t) => `#${t ?? '?'}`).join(', ')}</span> (1st first).
+            </p>
+            <p className="text-haze">{DRAW_METHOD}</p>
+          </>
+        ) : (
+          <p className="text-haze">The seed itself appears here with the winners, so anyone can check that they came from it.</p>
+        )}
+      </div>
+    </section>
+  )
 }
 
 /** Full prize details, winner slots, rules, my entries and the Enter CTA. */
@@ -92,7 +126,10 @@ export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, o
               ) : (
                 <Countdown target={raffle.deadline} variant="segments" className="mt-2" />
               )}
-              <p className="mt-2 text-[12px] text-haze">Deadline: {formatDateTime(raffle.deadline)}. The draw happens at that exact moment.</p>
+              <p className="mt-2 text-[12px] text-haze">
+                Deadline: {formatDateTime(raffle.deadline)}. The draw happens at that exact moment, live in the app, if at least {minEntriesToDraw(raffle.winners.length)} entries
+                were sold; with fewer, every entry is refunded in full.
+              </p>
             </section>
 
             <section className="rounded-card bg-white/5 p-4">
@@ -183,6 +220,8 @@ export function RaffleDetailSheet({ raffle, onClose, enterImmediately = false, o
                 ))}
               </ul>
             </section>
+
+            {raffle.seedCommitment && <DrawProof raffle={raffle} />}
           </div>
         )}
         {raffle && live && (

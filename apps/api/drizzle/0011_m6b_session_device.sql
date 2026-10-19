@@ -1,0 +1,1 @@
+ALTER TABLE "admin_sessions" ADD COLUMN "device_id" uuid;

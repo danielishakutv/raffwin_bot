@@ -4,6 +4,8 @@
  *   sender     every 1.5 s  the outbox -> Telegram (notify.sendPendingOnce)
  *   scheduler  every 60 s   broadcast fan-out, then reminders and come-back
  *                           offers (engagement.runEngagementOnce)
+ *   draws      every 5 s    seeds for open raffles, then every raffle past its
+ *                           deadline drawn or, under 5 entries, refunded (draw.ts)
  *
  * PM2 may run several API processes, and every one starts these loops. Each
  * tick first takes a Postgres advisory lock (held by a transaction for the
@@ -13,15 +15,19 @@
  */
 import { sql } from 'drizzle-orm'
 import type { AppContext } from '../context'
+import { ensureSeedCommitments, runDrawsOnce } from './draw'
 import { runEngagementOnce } from './engagement'
 import { fanOutOnce, sendPendingOnce } from './notify'
 
 /** Advisory lock keys, one per loop (admin/audit.ts uses 727_001) */
 const SENDER_LOCK_KEY = 727_101
 const SCHEDULER_LOCK_KEY = 727_102
+const DRAWS_LOCK_KEY = 727_103
 
 const SENDER_INTERVAL_MS = 1_500
 const SCHEDULER_INTERVAL_MS = 60_000
+/** Short, so the winners reach every open app within seconds of the deadline */
+const DRAWS_INTERVAL_MS = 5_000
 
 /**
  * Runs `work` only if this process gets the lock. The lock lives as long as
@@ -76,7 +82,7 @@ function startLoop(ctx: AppContext, name: string, key: number, intervalMs: numbe
   }
 }
 
-/** Starts the sender and the scheduler. Returns a function that stops both (await it before closing the pool). */
+/** Starts the sender, the scheduler and the draws. Returns a function that stops them (await it before closing the pool). */
 export function startWorkers(ctx: AppContext): () => Promise<void> {
   const sender = startLoop(ctx, 'sender', SENDER_LOCK_KEY, SENDER_INTERVAL_MS, async () => {
     const counts = await sendPendingOnce(ctx)
@@ -98,9 +104,16 @@ export function startWorkers(ctx: AppContext): () => Promise<void> {
     }
   })
 
-  ctx.log.info('workers started (outbox sender, scheduler)')
+  const draws = startLoop(ctx, 'draws', DRAWS_LOCK_KEY, DRAWS_INTERVAL_MS, async () => {
+    const seeded = await ensureSeedCommitments(ctx)
+    if (seeded) ctx.log.info({ worker: 'draws', seeded }, 'draw seeds committed for open raffles')
+    const pass = await runDrawsOnce(ctx)
+    if (pass.drawn || pass.cancelled || pass.failed) ctx.log.info({ worker: 'draws', ...pass }, 'draw pass')
+  })
+
+  ctx.log.info('workers started (outbox sender, scheduler, draws)')
   return async () => {
-    await Promise.all([sender.stop(), scheduler.stop()])
+    await Promise.all([sender.stop(), scheduler.stop(), draws.stop()])
     ctx.log.info('workers stopped')
   }
 }

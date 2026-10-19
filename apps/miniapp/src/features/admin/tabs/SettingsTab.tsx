@@ -4,6 +4,7 @@ import { adminCall } from '../adminSession'
 import { useAction, useLoad } from '../hooks'
 import { askText } from '../ask'
 import { Button, Card, Err, Field, Loading, Notice, TabHeading, TextInput } from '../ui'
+import { MyDevices, TeamRisk } from './TeamSecurity'
 
 export function SettingsTab({ can, superAdmin }: { can: string[]; superAdmin: boolean }) {
   const { data: s, error, reload } = useLoad<AdminSettings>('/settings')
@@ -96,7 +97,11 @@ export function SettingsTab({ can, superAdmin }: { can: string[]; superAdmin: bo
             </>
           )}
         </div>
-        <MyPassword />
+        <div className="grid content-start gap-4">
+          <MyPassword />
+          <MyDevices />
+          <TeamRisk />
+        </div>
       </div>
     </>
   )

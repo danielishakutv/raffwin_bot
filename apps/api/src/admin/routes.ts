@@ -38,6 +38,9 @@ import * as features from './features-admin'
 import * as messages from './messages'
 import * as admins from './admins'
 import * as finance from './finance'
+import * as devices from './devices'
+import { deviceSignInBrowser, deviceSignInTelegram } from './devices'
+import * as risk from './risk'
 import { fetchRemoteImage, storeUpload } from '../services/media'
 import type { Period } from './finance'
 
@@ -49,13 +52,22 @@ function idParam(req: Request): string {
   return parsed.data
 }
 
-function toMe(user: ReturnType<typeof adminOf>['user'], channel: AdminChannel): AdminMe {
-  return { id: user.id, name: user.name, telegramId: user.telegramId, role: user.role, permissions: permissionsOf(user.role), channel }
+function toMe(user: ReturnType<typeof adminOf>['user'], channel: AdminChannel, trustedDevice: boolean): AdminMe {
+  return {
+    id: user.id,
+    name: user.name,
+    telegramId: user.telegramId,
+    role: user.role,
+    permissions: permissionsOf(user.role),
+    channel,
+    atRisk: user.riskFlaggedAt !== null,
+    trustedDevice,
+  }
 }
 
 function me(req: Request): AdminMe {
-  const { user, channel } = adminOf(req)
-  return toMe(user, channel)
+  const { user, channel, deviceId } = adminOf(req)
+  return toMe(user, channel, deviceId !== null)
 }
 
 export function adminRoutes(ctx: AppContext): Router {
@@ -83,22 +95,31 @@ export function adminRoutes(ctx: AppContext): Router {
 
   // One-time ticket from the bot's admin sign-in + this Mini App's initData -> bearer token
   r.post('/auth/ticket', async (req, res) => {
-    const { admin, token, expiresAt } = await exchangeTicket(ctx, req)
-    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin.role), admin: toMe(admin, 'telegram') })
+    const { admin, token, expiresAt, deviceToken } = await exchangeTicket(ctx, req)
+    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin), admin: toMe(admin, 'telegram', !!deviceToken), deviceToken: deviceToken ?? null })
+  })
+  // A trusted device: in Telegram one tap (device secret + initData), in a browser the device secret + password
+  r.post('/auth/device/telegram', async (req, res) => {
+    const { admin, token, expiresAt } = await deviceSignInTelegram(ctx, req)
+    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin), admin: toMe(admin, 'telegram', true) })
+  })
+  r.post('/auth/device/browser', async (req, res) => {
+    const { admin, token, expiresAt } = await deviceSignInBrowser(ctx, req)
+    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin), admin: toMe(admin, 'browser', true) })
   })
   // Browser (desktop) sign-in: the same secrets, then a code the bot sends to the admin's bound Telegram
   r.post('/auth/web/start', async (req, res) => {
     res.json(await startWebLogin(ctx, req))
   })
   r.post('/auth/web/verify', async (req, res) => {
-    const { admin, token, expiresAt } = await verifyWebLogin(ctx, req)
-    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin.role), admin: toMe(admin, 'browser') })
+    const { admin, token, expiresAt, deviceToken } = await verifyWebLogin(ctx, req)
+    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, admin), admin: toMe(admin, 'browser', !!deviceToken), deviceToken: deviceToken ?? null })
   })
   // Reopened Mini App with a stored token: fresh initData from the bound account carries the session on
   r.post('/auth/resume', authed, async (req, res) => {
     const { expiresAt } = await resumeSession(ctx, req)
     const token = (req.get('authorization') ?? '').slice(7).trim()
-    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, adminOf(req).user.role), admin: me(req) })
+    res.json({ token, expiresAt, idleMinutes: idleMinutesFor(ctx, adminOf(req).user), admin: me(req) })
   })
   r.post('/auth/logout', authed, async (req, res) => {
     await logout(ctx, req)
@@ -111,6 +132,28 @@ export function adminRoutes(ctx: AppContext): Router {
   r.post('/me/password', authed, async (req, res) => {
     await admins.changeOwnPassword(ctx, adminOf(req).user.id, adminOf(req).sessionId, admins.passwordBody.parse(req.body))
     res.json({ ok: true })
+  })
+  // Your trusted devices, and taking trust away from one
+  r.get('/me/devices', authed, async (req, res) => {
+    res.json(await devices.listDevices(ctx, adminId(req), adminOf(req).deviceId))
+  })
+  r.post('/me/devices/:id/revoke', authed, async (req, res) => {
+    await devices.revokeDevice(ctx, adminId(req), idParam(req))
+    res.json(await devices.listDevices(ctx, adminId(req), adminOf(req).deviceId))
+  })
+
+  /* Team: any admin can ask to mark another at risk; a second admin agrees in Approvals */
+
+  r.get('/team', authed, async (req, res) => {
+    res.json(await risk.team(ctx, adminId(req)))
+  })
+  r.post('/team/:id/risk', authed, async (req, res) => {
+    const { reason } = risk.riskBody.parse(req.body)
+    res.status(202).json(await risk.requestRisk(ctx, adminId(req), idParam(req), 'admin_risk_flag', reason))
+  })
+  r.post('/team/:id/clear-risk', authed, async (req, res) => {
+    const { reason } = risk.riskBody.parse(req.body)
+    res.status(202).json(await risk.requestRisk(ctx, adminId(req), idParam(req), 'admin_risk_clear', reason))
   })
 
   /* Overview --------------------------------------------------------------- */
@@ -267,11 +310,12 @@ export function adminRoutes(ctx: AppContext): Router {
     const status = z.enum(['pending', 'approved', 'rejected', 'failed']).optional().parse(req.query.status || undefined)
     res.json(await listApprovals(ctx, { status }))
   })
-  r.post('/approvals/:id/approve', authed, perm('approvals.decide'), async (req, res) => {
+  // Who may decide is checked per request (decide): approvals.decide, or any other admin for an at-risk request
+  r.post('/approvals/:id/approve', authed, async (req, res) => {
     const { note } = decisionBody.parse(req.body ?? {})
     res.json(await decide(ctx, adminId(req), idParam(req), 'approve', note))
   })
-  r.post('/approvals/:id/reject', authed, perm('approvals.decide'), async (req, res) => {
+  r.post('/approvals/:id/reject', authed, async (req, res) => {
     const { note } = decisionBody.parse(req.body ?? {})
     res.json(await decide(ctx, adminId(req), idParam(req), 'reject', note))
   })

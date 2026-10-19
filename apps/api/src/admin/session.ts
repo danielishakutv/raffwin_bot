@@ -23,6 +23,12 @@
  * secrets, where the possession factor is a 6-digit code the bot sends to the
  * bound Telegram account (admin/web-login.ts). Its sessions are the same
  * bearer tokens with channel 'browser', the same limits, and no resume.
+ *
+ * Since 19 Oct all of the above is for a device's first sign-in only: a
+ * successful full sign-in can register the device as trusted, and a trusted
+ * device signs in with far less (admin/devices.ts). An account two admins have
+ * marked at risk (admin/risk.ts) loses its devices and the super admin's longer
+ * idle limit until it is cleared.
  */
 import { hash as argonHash, verify as argonVerify } from '@node-rs/argon2'
 import { and, eq, gt, isNull, sql } from 'drizzle-orm'
@@ -39,13 +45,14 @@ import { readInitDataUser, verifyTelegramData } from '../lib/telegram-auth'
 import { requestMeta } from '../http/middleware'
 import type { Tx } from '../services/ledger'
 import { appendAudit } from './audit'
+import { registerDevice } from './devices'
 import { can, type Permission } from './permissions'
 
 export const TICKET_MINUTES = 5
 
-/** Minutes without a request before a session ends, by role */
-export function idleMinutesFor(ctx: AppContext, role: AdminUserRow['role']): number {
-  return role === 'super_admin' ? ctx.config.ADMIN_SUPER_IDLE_MINUTES : ctx.config.ADMIN_IDLE_MINUTES
+/** Minutes without a request before a session ends: longer for super admins, unless marked at risk */
+export function idleMinutesFor(ctx: AppContext, admin: Pick<AdminUserRow, 'role' | 'riskFlaggedAt'>): number {
+  return admin.role === 'super_admin' && !admin.riskFlaggedAt ? ctx.config.ADMIN_SUPER_IDLE_MINUTES : ctx.config.ADMIN_IDLE_MINUTES
 }
 
 /** How a session signed in: the bot's Open admin button, or the browser sign-in (admin/web-login.ts) */
@@ -55,6 +62,8 @@ export interface AdminCaller {
   user: AdminUserRow
   sessionId: string
   channel: AdminChannel
+  /** The trusted device this session came from, if any */
+  deviceId: string | null
 }
 
 declare global {
@@ -116,12 +125,18 @@ export async function issueTicket(ctx: AppContext, adminId: string, telegramId: 
 export const ticketBody = z.object({
   ticket: z.string().min(20).max(100),
   initData: z.string().min(1).max(8192),
+  /** Trust this device from now on (admin/devices.ts) */
+  rememberDevice: z.boolean().optional().default(false),
+  /** Telegram's platform name (ios, android, tdesktop...), for the device list */
+  platform: z.string().max(30).optional(),
 })
 
 export interface AdminLogin {
   admin: AdminUserRow
   token: string
   expiresAt: number
+  /** Set when this sign-in registered the device: the device keeps it */
+  deviceToken?: string | null
 }
 
 /**
@@ -165,20 +180,24 @@ export async function exchangeTicket(ctx: AppContext, req: Request): Promise<Adm
     const [admin] = await tx.select().from(adminUsers).where(eq(adminUsers.id, t.adminId))
     if (!admin || admin.status !== 'active' || admin.telegramId !== tg.id) return { kind: 'admin_unavailable' as const }
     await tx.update(adminTickets).set({ usedAt: new Date(now) }).where(eq(adminTickets.id, t.id))
+    const device = body.rememberDevice
+      ? await registerDevice(ctx, tx, { admin, channel: 'telegram', userAgent: meta.userAgent, ipHash: meta.ipHash, platform: body.platform })
+      : null
     const { token, expiresAt } = await openSession(ctx, tx, {
       admin,
       channel: 'telegram',
+      deviceId: device?.deviceId ?? null,
       ipHash: meta.ipHash,
       userAgent: req.get('user-agent') ?? null,
-      auditAfter: { telegramId: tg.id },
+      auditAfter: { telegramId: tg.id, deviceTrusted: !!device },
     })
-    return { kind: 'ok' as const, admin, token, expiresAt }
+    return { kind: 'ok' as const, admin, token, expiresAt, deviceToken: device?.token ?? null }
   })
 
   if (result.kind !== 'ok') {
     return refuse(`admin_ticket_${result.kind}`, 'ticketTelegramId' in result ? { ticketTelegramId: result.ticketTelegramId } : {})
   }
-  return { admin: result.admin, token: result.token, expiresAt: result.expiresAt }
+  return { admin: result.admin, token: result.token, expiresAt: result.expiresAt, deviceToken: result.deviceToken }
 }
 
 /**
@@ -189,7 +208,14 @@ export async function exchangeTicket(ctx: AppContext, req: Request): Promise<Adm
 export async function openSession(
   ctx: AppContext,
   tx: Tx,
-  input: { admin: AdminUserRow; channel: AdminChannel; ipHash: string | null; userAgent: string | null; auditAfter: Record<string, unknown> },
+  input: {
+    admin: AdminUserRow
+    channel: AdminChannel
+    deviceId?: string | null
+    ipHash: string | null
+    userAgent: string | null
+    auditAfter: Record<string, unknown>
+  },
 ): Promise<{ token: string; expiresAt: number }> {
   const token = newRefreshToken()
   const expiresAt = ctx.now() + ctx.config.ADMIN_SESSION_HOURS * 3_600_000
@@ -200,6 +226,7 @@ export async function openSession(
     userAgent: input.userAgent?.slice(0, 400) ?? null,
     expiresAt: new Date(expiresAt),
     channel: input.channel,
+    deviceId: input.deviceId ?? null,
   })
   await appendAudit(tx, {
     adminId: input.admin.id,
@@ -288,14 +315,14 @@ export function requireAdmin(ctx: AppContext): RequestHandler {
           gt(adminSessions.expiresAt, new Date(now)),
         ),
       )
-    const idle = row ? now - row.session.lastSeenAt.getTime() > idleMinutesFor(ctx, row.admin.role) * 60_000 : false
+    const idle = row ? now - row.session.lastSeenAt.getTime() > idleMinutesFor(ctx, row.admin) * 60_000 : false
     if (!row || row.admin.status !== 'active' || idle) {
       throw new HttpError('AUTH_INVALID', 'Your admin session has ended. Unlock it from the bot again.')
     }
     if (now - row.session.lastSeenAt.getTime() > 60_000) {
       await ctx.db.update(adminSessions).set({ lastSeenAt: new Date(now) }).where(eq(adminSessions.id, row.session.id))
     }
-    req.admin = { user: row.admin, sessionId: row.session.id, channel: row.session.channel }
+    req.admin = { user: row.admin, sessionId: row.session.id, channel: row.session.channel, deviceId: row.session.deviceId }
     next()
   }
 }

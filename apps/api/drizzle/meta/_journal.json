@@ -71,6 +71,20 @@
       "when": 1792211048043,
       "tag": "0009_m5_engagement_features",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792402112185,
+      "tag": "0010_m6_draws_devices_risk",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792402386205,
+      "tag": "0011_m6b_session_device",
+      "breakpoints": true
     }
   ]
 }

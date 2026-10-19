@@ -16,6 +16,7 @@ import type { AppContext } from '../context'
 import type { Db } from '../db/client'
 import {
   broadcasts,
+  entries,
   notifications,
   settings,
   users,
@@ -133,6 +134,7 @@ const BROADCAST_NOTIFICATION_KIND: Record<BroadcastKind, NotificationKind> = {
   feature: 'feature',
   raffle_new: 'raffle_new',
   raffle_cancelled: 'raffle_cancelled',
+  raffle_drawn: 'raffle_drawn',
 }
 
 /** Who a broadcast reaches, as SQL over users. Blocked and suspended players never are. */
@@ -160,6 +162,12 @@ function audienceWhere(ctx: AppContext, b: BroadcastRow): SQL {
   }
   // Players can switch new-raffle alerts off (or an admin for them); announcements always go
   if (b.kind === 'raffle_new') parts.push(sql`${featureSql('new_raffle_alerts')} = true`)
+  // Winners announced: the raffle's own entrants always hear, everyone else as with new raffles
+  if (b.kind === 'raffle_drawn') {
+    parts.push(
+      sql`(${featureSql('new_raffle_alerts')} = true or exists (select 1 from ${entries} e where e.user_id = ${users.id} and e.raffle_id::text = ${b.refId}))`,
+    )
+  }
   if (b.cursorUserId) parts.push(gt(users.id, b.cursorUserId))
   return and(...parts) as SQL
 }
@@ -272,12 +280,12 @@ const OPT_OUT_KINDS: ReadonlySet<NotificationKind> = new Set(['reminder', 'comeb
 const QUIET_HOURS_KINDS = OPT_OUT_KINDS
 /**
  * Claim order when more is due than one pass takes: a player's own transfer
- * first, then reminders and offers, then broadcasts; oldest first within each.
+ * or win first, then reminders and offers, then broadcasts; oldest first within each.
  * A 50,000-player announcement must not hold a transfer back for minutes.
  */
-const KIND_RANK = sql`case ${notifications.kind} when 'transfer' then 0 when 'comeback' then 1 when 'reminder' then 1 else 2 end`
+const KIND_RANK = sql`case ${notifications.kind} when 'transfer' then 0 when 'raffle_won' then 0 when 'comeback' then 1 when 'reminder' then 1 else 2 end`
 function kindRank(kind: NotificationKind): number {
-  return kind === 'transfer' ? 0 : kind === 'comeback' || kind === 'reminder' ? 1 : 2
+  return kind === 'transfer' || kind === 'raffle_won' ? 0 : kind === 'comeback' || kind === 'reminder' ? 1 : 2
 }
 
 /**

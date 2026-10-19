@@ -9,11 +9,12 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BarChart3, ClipboardCheck, Cog, Gift, Lock, Megaphone, Monitor, ScrollText, ShieldAlert, ToggleRight, UserCog, Users, Wallet } from 'lucide-react'
+import { BarChart3, ClipboardCheck, Cog, Gift, Lock, Megaphone, Monitor, ScrollText, ShieldAlert, ShieldCheck, ToggleRight, UserCog, Users, Wallet } from 'lucide-react'
 import { cn } from '@/components/ui/cn'
 import { env } from '@/services/env'
 import { isInsideTelegram } from '@/services/telegram'
-import { adminCall, useAdminSession } from './adminSession'
+import { errorMessage } from '@/api/errors'
+import { adminCall, hasTrustedDevice, signInWithDevice, useAdminSession } from './adminSession'
 import { desktopAdminUrl } from './browserMode'
 import { RafflesTab } from './raffles/RafflesTab'
 import { AdminsTab } from './tabs/AdminsTab'
@@ -52,6 +53,50 @@ function rememberedTab(): Tab {
     // Storage blocked in this webview: start on the overview
     return 'overview'
   }
+}
+
+/** Inside Telegram, on a trusted device: one tap instead of the bot sign-in. Shows nothing elsewhere. */
+function TrustedOpen() {
+  const [trusted, setTrusted] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    hasTrustedDevice().then(
+      (t) => alive && setTrusted(t),
+      (e: unknown) => console.warn('[admin] could not check for a trusted device', e),
+    )
+    return () => {
+      alive = false
+    }
+  }, [])
+  if (!trusted && !error) return <div className="mt-2" />
+  return (
+    <div className="mt-5">
+      <Err message={error} className="text-left" />
+      {trusted && (
+        <Button
+          variant="solid"
+          className="w-full"
+          busy={busy}
+          icon={<ShieldCheck size={15} />}
+          onClick={() => {
+            setBusy(true)
+            setError(null)
+            signInWithDevice()
+              .then((ok) => ok || setTrusted(false))
+              .catch((e: unknown) => {
+                setError(errorMessage(e))
+                setTrusted(false)
+              })
+              .finally(() => setBusy(false))
+          }}
+        >
+          Open with this trusted device
+        </Button>
+      )}
+    </div>
+  )
 }
 
 export function AdminScreen() {
@@ -93,7 +138,8 @@ export function AdminScreen() {
             On a computer, open <span className="select-all font-semibold text-black [overflow-wrap:anywhere]">{desktopAdminUrl()}</span> and sign in with the same details; the bot sends you a code.
           </p>
           <Err message={error} className="text-left" />
-          <Button className="mt-5 w-full" onClick={() => navigate('/profile')}>
+          <TrustedOpen />
+          <Button className="mt-3 w-full" onClick={() => navigate('/profile')}>
             Back to the app
           </Button>
         </div>
@@ -139,6 +185,16 @@ export function AdminScreen() {
               {me.channel === 'browser' && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-black px-2 py-px text-[11px] font-semibold text-white">
                   <Monitor size={11} /> Browser session
+                </span>
+              )}
+              {me.trustedDevice && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-black/20 px-2 py-px text-[11px] font-semibold text-neutral-700">
+                  <ShieldCheck size={11} /> Trusted device
+                </span>
+              )}
+              {me.atRisk && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-black px-2 py-px text-[11px] font-bold text-white">
+                  <ShieldAlert size={11} /> Marked at risk: full checks on every sign-in
                 </span>
               )}
             </p>

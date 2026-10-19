@@ -456,6 +456,8 @@ export async function drawRaffle(raffleId: string): Promise<{ raffle: Raffle; ba
       if (iEntered && me) picked.splice(Math.floor(Math.random() * places), 0, me)
       raffle.winners.forEach((slot, i) => {
         slot.username = picked[i] ?? pool[i] ?? null
+        slot.name = slot.username ? `@${slot.username}` : null
+        slot.ticket = slot.username ? i + 1 : null
       })
       raffle.drawnAt = new Date(now).toISOString()
 

@@ -80,7 +80,7 @@ export function seedRaffles(now: number): Raffle[] {
   // Demo raffles are written in Naira (easier to read) and priced in fixed Raffs
   // at the demo base of BASE_NAIRA_PER_RAFF, exactly like the real API prices them.
   const r = (
-    partial: Omit<Raffle, 'entriesTarget' | 'rules' | 'entrants' | 'winners' | 'entryPriceRaffs' | 'seedCommitment' | 'imageUrl'> & {
+    partial: Omit<Raffle, 'entriesTarget' | 'rules' | 'entrants' | 'winners' | 'entryPriceRaffs' | 'seedCommitment' | 'drawSeed' | 'imageUrl'> & {
       entryPriceNaira: number
       poolTargetNaira: number
       winners: [string, string, string]
@@ -103,13 +103,14 @@ export function seedRaffles(now: number): Raffle[] {
       imageUrl: null,
       entryPriceRaffs: Math.ceil(entryPriceNaira / BASE_NAIRA_PER_RAFF),
       seedCommitment: null,
+      drawSeed: null,
       entriesTarget: Math.round(poolTargetNaira / entryPriceNaira),
       rules: [...rules, ...commonRules],
       entrants: pick(DEMO_ENTRANTS, 14, entrantsOffset),
       winners: [
-        { position: 1, prizeItem: winners[0], username: winnerNames[0] },
-        { position: 2, prizeItem: winners[1], username: winnerNames[1] },
-        { position: 3, prizeItem: winners[2], username: winnerNames[2] },
+        { position: 1, prizeItem: winners[0], username: winnerNames[0], name: winnerNames[0] && `@${winnerNames[0]}`, ticket: null },
+        { position: 2, prizeItem: winners[1], username: winnerNames[1], name: winnerNames[1] && `@${winnerNames[1]}`, ticket: null },
+        { position: 3, prizeItem: winners[2], username: winnerNames[2], name: winnerNames[2] && `@${winnerNames[2]}`, ticket: null },
       ],
     }
   }

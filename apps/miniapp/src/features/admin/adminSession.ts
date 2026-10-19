@@ -9,6 +9,12 @@
  *
  * In a normal browser (desktop) the admin signs in with the same secrets plus
  * a code from the bot instead (webLoginStart / webLoginVerify below).
+ *
+ * Trusted devices (19 Oct): a full sign-in trusts the device it happened on
+ * and hands back a device secret. Kept here, it lets the next sign-in skip the
+ * full checks: in Telegram one tap (signInWithDevice), in a browser the admin
+ * password alone (browserDeviceSignIn). Locking the admin does not forget it;
+ * the API refusing it does.
  */
 import { create } from 'zustand'
 import type { AdminLoginResponse, AdminMe, AdminWebLoginChallenge } from '@raffwin/shared/admin-types'
@@ -81,10 +87,77 @@ export async function webLoginStart(body: WebLoginStartBody): Promise<AdminWebLo
   return postOpen<AdminWebLoginChallenge>('/auth/web/start', body)
 }
 
-/** POST /auth/web/verify: the code from the bot. On success the admin is unlocked in this tab. */
-export async function webLoginVerify(challengeId: string, code: string): Promise<void> {
-  const login = await postOpen<AdminLoginResponse>('/auth/web/verify', { challengeId, code })
-  useAdminSession.getState().set({ token: login.token, expiresAt: login.expiresAt, idleMinutes: login.idleMinutes, me: login.admin, error: null, kept: keepBrowser(login) })
+/** POST /auth/web/verify: the code from the bot. On success the admin is unlocked in this tab (and this browser trusted, if asked). */
+export async function webLoginVerify(challengeId: string, code: string, rememberDevice: boolean): Promise<void> {
+  const login = await postOpen<AdminLoginResponse>('/auth/web/verify', { challengeId, code, rememberDevice })
+  const trusted = login.deviceToken ? keepBrowserDevice(login.deviceToken, login.admin.name) : null
+  acceptBrowser(login, trusted)
+}
+
+function acceptBrowser(login: AdminLoginResponse, note: string | null): void {
+  useAdminSession.getState().set({
+    token: login.token,
+    expiresAt: login.expiresAt,
+    idleMinutes: login.idleMinutes,
+    me: login.admin,
+    error: null,
+    kept: [keepBrowser(login), note].filter(Boolean).join(' '),
+  })
+}
+
+/* Trusted browser ------------------------------------------------------------ */
+
+const WEB_DEVICE_KEY = 'raffwin_admin_device_web'
+
+export interface BrowserDevice {
+  token: string
+  /** The admin's name, to greet them on the short sign-in */
+  name: string
+}
+
+/** The trusted-device secret this browser holds, if any. */
+export function browserDevice(): BrowserDevice | null {
+  try {
+    const raw = localStorage.getItem(WEB_DEVICE_KEY)
+    if (!raw) return null
+    const v = JSON.parse(raw) as Partial<BrowserDevice>
+    return typeof v.token === 'string' && typeof v.name === 'string' ? { token: v.token, name: v.name } : null
+  } catch (error) {
+    console.warn('[admin] could not read the trusted browser', error)
+    return null
+  }
+}
+
+export function forgetBrowserDevice(): void {
+  try {
+    localStorage.removeItem(WEB_DEVICE_KEY)
+  } catch (error) {
+    console.warn('[admin] could not forget the trusted browser', error)
+  }
+}
+
+function keepBrowserDevice(token: string, name: string): string {
+  try {
+    localStorage.setItem(WEB_DEVICE_KEY, JSON.stringify({ token, name }))
+    return 'This browser is trusted: next time only your password is asked.'
+  } catch (error) {
+    console.warn('[admin] localStorage refused the trusted browser', error)
+    return 'This browser blocks storage, so it cannot be trusted; the full sign-in stays.'
+  }
+}
+
+/** POST /auth/device/browser: this trusted browser + the admin password. A refusal that ends the trust forgets it here too. */
+export async function browserDeviceSignIn(password: string): Promise<void> {
+  const device = browserDevice()
+  if (!device) throw new ApiError('AUTH_INVALID', 'This browser is not trusted. Use the full sign-in.')
+  try {
+    const login = await postOpen<AdminLoginResponse>('/auth/device/browser', { deviceToken: device.token, password })
+    acceptBrowser(login, null)
+  } catch (error) {
+    // "Wrong password, N tries left" keeps the trust; anything else from the API means it is gone
+    if (error instanceof ApiError && error.code === 'AUTH_INVALID' && !/tries? left/.test(error.message)) forgetBrowserDevice()
+    throw error
+  }
 }
 
 /** Unauthenticated POST (sign-in steps): errors are thrown for the form, the session is not touched. */
@@ -167,6 +240,7 @@ function call<T>(run: (done: (error: string | null, value?: T) => void) => void)
 
 /** Returns what to tell the admin about keeping the session after the Mini App closes. */
 async function keep(login: AdminLoginResponse): Promise<string> {
+  if (login.admin.atRisk) return 'Your account is marked at risk, so closing the app locks the admin.'
   if (login.admin.role !== 'super_admin') return 'Closing the app locks the admin.'
   const store = secureStorage()
   if (!store) return 'This Telegram app has no secure storage, so closing it locks the admin. Update Telegram to stay signed in.'
@@ -187,7 +261,79 @@ async function forgetStored(): Promise<void> {
 
 async function accept(login: AdminLoginResponse): Promise<void> {
   useAdminSession.getState().set({ token: login.token, expiresAt: login.expiresAt, idleMinutes: login.idleMinutes, me: login.admin, error: null, kept: null })
-  useAdminSession.getState().set({ kept: await keep(login) })
+  const notes = [await keep(login)]
+  if (login.deviceToken) notes.push(await keepDevice(login.deviceToken))
+  useAdminSession.getState().set({ kept: notes.join(' ') })
+}
+
+/* Trusted Telegram device ------------------------------------------------------
+ * The secret goes to Telegram's secure storage (Keychain / Keystore) where the
+ * app has it, otherwise to its device storage (desktop apps). Either way it
+ * only works together with fresh initData from the admin's bound account.
+ * -------------------------------------------------------------------------- */
+
+const DEVICE_KEY = 'raffwin_admin_device'
+
+function deviceStores() {
+  const app = getWebApp()
+  if (!app?.isVersionAtLeast?.('9.0')) return []
+  return [app.SecureStorage, app.DeviceStorage].filter((s): s is NonNullable<typeof s> => !!s)
+}
+
+async function keepDevice(token: string): Promise<string> {
+  for (const store of deviceStores()) {
+    const r = await call<boolean>((done) => store.setItem(DEVICE_KEY, token, done))
+    if (!r.error) return 'This device is now trusted: next time one tap opens the admin.'
+    console.warn('[admin] a Telegram storage refused the trusted device', r.error)
+  }
+  return 'This Telegram app cannot store a trusted device, so the full sign-in stays. Update Telegram to fix that.'
+}
+
+async function readDevice(): Promise<string | null> {
+  for (const store of deviceStores()) {
+    const r = await call<string | null>((done) => store.getItem(DEVICE_KEY, done))
+    if (r.error) {
+      console.warn('[admin] could not read the trusted device', r.error)
+      continue
+    }
+    if (r.value) return r.value
+  }
+  return null
+}
+
+async function forgetDevice(): Promise<void> {
+  for (const store of deviceStores()) {
+    const r = await call<boolean>((done) => store.removeItem(DEVICE_KEY, done))
+    if (r.error) console.warn('[admin] could not forget the trusted device', r.error)
+  }
+}
+
+/** Whether this Telegram app holds a trusted-device secret. */
+export async function hasTrustedDevice(): Promise<boolean> {
+  return (await readDevice()) !== null
+}
+
+/**
+ * One tap: the trusted-device secret + this launch's initData. Resolves true
+ * when the admin is unlocked, false when this device holds no secret. A refusal
+ * throws with the API's reason, and a refused secret is forgotten here.
+ */
+export async function signInWithDevice(): Promise<boolean> {
+  const deviceToken = await readDevice()
+  const initData = getWebApp()?.initData
+  if (!deviceToken || !initData || !env.apiUrl) return false
+  try {
+    const res = await fetch(`${env.apiUrl}/admin/v1/auth/device/telegram`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceToken, initData }),
+    })
+    await accept(await parse<AdminLoginResponse>(res))
+    return true
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'AUTH_INVALID') await forgetDevice()
+    throw error
+  }
 }
 
 /**
@@ -262,7 +408,8 @@ export async function unlockFromUrl(): Promise<boolean> {
     const res = await fetch(`${env.apiUrl}/admin/v1/auth/ticket`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ticket, initData }),
+      // A full sign-in trusts this device (Settings > My devices takes that back)
+      body: JSON.stringify({ ticket, initData, rememberDevice: true, platform: getWebApp()?.platform }),
     })
     await accept(await parse<AdminLoginResponse>(res))
   } catch (error) {

@@ -403,14 +403,17 @@ export async function announceRaffleCancelled(
   entrantIds: string[],
   adminId: string | null,
   at: Date,
+  notReached?: { sold: number; need: number },
 ): Promise<string | null> {
   await cancelBroadcastsFor(tx, { type: 'raffle', id: raffle.id }, ['raffle_new'], at)
   const userIds = [...new Set(entrantIds)]
   if (userIds.length === 0) return null
   const b = await createBroadcast(tx, {
     kind: 'raffle_cancelled',
-    title: `Raffle cancelled: ${raffle.prizeName}`,
-    text: `The ${raffle.prizeName} raffle has been cancelled. Every Raff you spent on entries in it has been refunded to your Raffle Win balance, in full.\n\nWe are sorry about this. Tap below to see your balance and the raffles still open.`,
+    title: notReached ? `Not drawn: ${raffle.prizeName}` : `Raffle cancelled: ${raffle.prizeName}`,
+    text: notReached
+      ? `The ${raffle.prizeName} raffle closed with ${notReached.sold} ${notReached.sold === 1 ? 'entry' : 'entries'}. A draw needs at least ${notReached.need}, so it was not drawn. Every Raff you spent on it has been refunded to your Raffle Win balance, in full.\n\nTap below to see your balance and the raffles still open.`
+      : `The ${raffle.prizeName} raffle has been cancelled. Every Raff you spent on entries in it has been refunded to your Raffle Win balance, in full.\n\nWe are sorry about this. Tap below to see your balance and the raffles still open.`,
     openButton: true,
     audience: { type: 'users', userIds },
     refType: 'raffle',

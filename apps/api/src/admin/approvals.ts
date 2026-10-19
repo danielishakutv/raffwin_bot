@@ -14,6 +14,7 @@ import { putSetting } from '../services/settings'
 import { appendAudit } from './audit'
 import { announceRaffleCancelled } from './messages'
 import { can } from './permissions'
+import { applyRisk, isRiskAction, tellRiskDecision } from './risk'
 
 const EXPIRY_HOURS = 72
 type Action = (typeof APPROVAL_ACTIONS)[number]
@@ -22,6 +23,8 @@ export interface Payloads {
   rate_base_change: { starsPerRaffMicro: number; previousMicro: number }
   balance_adjustment: { userId: string; username: string | null; raffs: number }
   raffle_cancel: { raffleId: string; prizeName: string; entriesCount: number }
+  admin_risk_flag: { adminId: string; name: string }
+  admin_risk_clear: { adminId: string; name: string }
 }
 
 export function summarise(action: Action, payload: Record<string, unknown>): string {
@@ -37,6 +40,14 @@ export function summarise(action: Action, payload: Record<string, unknown>): str
     case 'raffle_cancel': {
       const p = payload as unknown as Payloads['raffle_cancel']
       return `Cancel "${p.prizeName}" and refund ${p.entriesCount} entr${p.entriesCount === 1 ? 'y' : 'ies'}`
+    }
+    case 'admin_risk_flag': {
+      const p = payload as unknown as Payloads['admin_risk_flag']
+      return `Mark ${p.name} at risk: signed out everywhere, trusted devices removed, full checks on every sign-in`
+    }
+    case 'admin_risk_clear': {
+      const p = payload as unknown as Payloads['admin_risk_clear']
+      return `Clear the at-risk mark on ${p.name}`
     }
   }
 }
@@ -78,6 +89,8 @@ export async function executeDirect<A extends Action>(
   payload: Payloads[A],
   reason: string,
 ): Promise<AdminApproval> {
+  // Two admins, always: there is no one-person path to mark an admin at risk or clear it
+  if (isRiskAction(action)) throw new HttpError('FORBIDDEN', 'This needs a second admin to agree.')
   let id: string
   try {
     id = await ctx.db.transaction(async (tx) => {
@@ -138,6 +151,7 @@ export async function listApprovals(ctx: AppContext, filter: { status?: string; 
     reason: a.reason,
     status: a.status,
     requestedBy,
+    requestedByAdminId: a.requestedByAdminId,
     decidedBy: decidedBy ?? (a.status === 'approved' ? 'done directly (super admin)' : null),
     decidedAt: a.decidedAt?.toISOString() ?? null,
     result: a.result,
@@ -154,18 +168,28 @@ export async function decide(
   note: string,
 ): Promise<AdminApproval> {
   const [decider] = await ctx.db.select().from(adminUsers).where(eq(adminUsers.id, deciderId))
-  if (!decider || !can(decider.role, 'approvals.decide')) throw new HttpError('FORBIDDEN', 'Your role cannot decide approvals.')
+  if (!decider || decider.status !== 'active') throw new HttpError('FORBIDDEN', 'Your role cannot decide approvals.')
 
+  let decided: { action: Action; payload: Record<string, unknown>; approved: boolean } | null = null
   try {
     await ctx.db.transaction(async (tx) => {
       const [a] = await tx.select().from(approvals).where(eq(approvals.id, approvalId)).for('update')
       if (!a) throw new HttpError('NOT_FOUND', 'No such approval.')
+      // Marking an admin at risk (or clearing it) is agreed by any second admin, never by the one it is about
+      if (isRiskAction(a.action)) {
+        if ((a.payload as { adminId?: string }).adminId === deciderId) {
+          throw new HttpError('FORBIDDEN', 'Two other admins decide this; it is about you.')
+        }
+      } else if (!can(decider.role, 'approvals.decide')) {
+        throw new HttpError('FORBIDDEN', 'Your role cannot decide approvals.')
+      }
       if (a.status !== 'pending') throw new HttpError('INVALID_INPUT', `This request is already ${a.status}.`)
       if (a.expiresAt.getTime() <= ctx.now()) throw new HttpError('INVALID_INPUT', 'This request has expired. Ask for it again.')
       if (a.requestedByAdminId === deciderId) {
         throw new HttpError('FORBIDDEN', 'A second admin has to decide this; you asked for it.')
       }
-      const result = verdict === 'approve' ? await execute(tx, a.action, a.payload as never, deciderId, new Date(ctx.now())) : null
+      const result = verdict === 'approve' ? await execute(tx, a.action, a.payload as never, deciderId, new Date(ctx.now()), a.reason) : null
+      decided = { action: a.action, payload: a.payload as Record<string, unknown>, approved: verdict === 'approve' }
       await tx
         .update(approvals)
         .set({
@@ -194,10 +218,12 @@ export async function decide(
       .where(eq(approvals.id, approvalId))
     throw new HttpError('SERVER_ERROR', `The approved action failed: ${message}`)
   }
+  const done = decided as { action: Action; payload: Record<string, unknown>; approved: boolean } | null
+  if (done?.approved && isRiskAction(done.action)) await tellRiskDecision(ctx, done.action, String(done.payload.adminId))
   return (await listApprovals(ctx, { id: approvalId }))[0] as AdminApproval
 }
 
-async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminId: string, at: Date): Promise<Record<string, unknown>> {
+async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminId: string, at: Date, reason = ''): Promise<Record<string, unknown>> {
   switch (action) {
     case 'rate_base_change': {
       const p = payload as Payloads['rate_base_change']
@@ -222,6 +248,11 @@ async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminI
       const p = payload as Payloads['raffle_cancel']
       return cancelRaffle(tx, p.raffleId, adminId, at)
     }
+    case 'admin_risk_flag':
+    case 'admin_risk_clear': {
+      const p = payload as Payloads['admin_risk_flag']
+      return applyRisk(tx, action, p.adminId, reason, at)
+    }
   }
 }
 
@@ -230,8 +261,17 @@ async function execute(tx: Tx, action: Action, payload: Payloads[Action], adminI
  * each refunded entry is reversed. Lock order: raffle, then users by id.
  * In the same transaction, the bot is told to message every entrant that the
  * raffle was cancelled and their Raffs refunded (and its new-raffle alert stops).
+ * `notReached` = the draw found too few entries (services/draw.ts, no admin):
+ * the refund lines and the message say so instead of "was cancelled".
  */
-async function cancelRaffle(tx: Tx, raffleId: string, adminId: string, at: Date): Promise<Record<string, unknown>> {
+export async function cancelRaffle(
+  tx: Tx,
+  raffleId: string,
+  adminId: string | null,
+  at: Date,
+  notReached?: { sold: number; need: number },
+): Promise<Record<string, unknown>> {
+  const why = notReached ? `did not reach ${notReached.need} entries` : 'was cancelled'
   const [raffle] = await tx.select().from(raffles).where(eq(raffles.id, raffleId)).for('update')
   if (!raffle) throw new Error('raffle no longer exists')
   if (raffle.status === 'drawn' || raffle.status === 'cancelled') throw new Error(`raffle is already ${raffle.status}`)
@@ -247,7 +287,7 @@ async function cancelRaffle(tx: Tx, raffleId: string, adminId: string, at: Date)
       userId: e.userId,
       type: 'refund',
       raffs: e.raffsSpent,
-      note: `Refund: ${raffle.prizeName} was cancelled`,
+      note: `Refund: ${raffle.prizeName} ${why}`,
       referenceType: 'entry',
       referenceId: e.id,
     })
@@ -259,7 +299,7 @@ async function cancelRaffle(tx: Tx, raffleId: string, adminId: string, at: Date)
       userId: r.referrerUserId,
       type: 'referral_reversal',
       raffs: -r.raffs,
-      note: `Referral reversed: ${raffle.prizeName} was cancelled`,
+      note: `Referral reversed: ${raffle.prizeName} ${why}`,
       referenceType: 'entry',
       referenceId: r.entryId,
     })
@@ -268,6 +308,6 @@ async function cancelRaffle(tx: Tx, raffleId: string, adminId: string, at: Date)
   }
   await tx.update(raffles).set({ status: 'cancelled', cancelledAt: sql`now()`, updatedAt: sql`now()` }).where(eq(raffles.id, raffleId))
   const entrants = [...new Set(list.map((e) => e.userId))]
-  const broadcastId = await announceRaffleCancelled(tx, raffle, entrants, adminId, at)
+  const broadcastId = await announceRaffleCancelled(tx, raffle, entrants, adminId, at, notReached)
   return { entriesRefunded: list.length, raffsRefunded: refunded, referralRaffsReversed: reversed, playersNotified: broadcastId ? entrants.length : 0 }
 }

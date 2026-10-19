@@ -1,185 +1,103 @@
-import { AnimatePresence, motion } from 'framer-motion'
-import { PartyPopper, Trophy } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-import { errorMessage } from '@/api/errors'
+/**
+ * The prize places of a raffle whose deadline has passed. The server draws;
+ * this never does (except the demo build, which has no server).
+ *
+ *   drawing  the deadline passed and the result is a few seconds away; or,
+ *            under the minimum entries, the raffle is about to be refunded
+ *   drawn    the winners with their prizes and tickets, and "Watch the draw"
+ *            to replay the live show (LiveDrawShow)
+ */
+import { motion } from 'framer-motion'
+import { Clapperboard, PartyPopper, Trophy, Undo2 } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { minEntriesToDraw } from '@raffwin/shared'
+import { usingRealApi } from '@/api'
 import { BouncyButton } from '@/components/ui/BouncyButton'
 import { cn } from '@/components/ui/cn'
 import { Spinner } from '@/components/ui/Spinner'
-import type { Raffle, WinnerSlot } from '@/data/types'
-import { medalClass, prizeLabel } from '@/data/prizes'
-import { celebrate } from '@/services/confetti'
-import { haptics } from '@/services/haptics'
-import { sound } from '@/services/sound'
+import { medalClass, prizeLabel, winnerName } from '@/data/prizes'
+import type { Raffle } from '@/data/types'
+import { formatInt } from '@/services/format'
 import { useAppStore } from '@/store/useAppStore'
+import { useDrawShow } from './drawShow'
 
-type Phase = 'idle' | 'loading' | 'rolling' | 'done' | 'error'
-
-const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-
-/**
- * Winner reveal for a raffle whose deadline has passed. Names roll with a
- * drumroll, then land one at a time from the last place up to 1st.
- */
-export function DrawReveal({ raffle, onRevealed }: { raffle: Raffle; onRevealed?: (youWon: boolean) => void }) {
-  const drawRaffle = useAppStore((s) => s.drawRaffle)
+export function DrawReveal({ raffle }: { raffle: Raffle }) {
   const me = useAppStore((s) => s.profile?.username ?? null)
-  const [phase, setPhase] = useState<Phase>(raffle.drawnAt ? 'done' : 'idle')
-  const [winners, setWinners] = useState<WinnerSlot[]>(raffle.drawnAt ? raffle.winners : [])
-  const places = raffle.winners.map((w) => w.position).sort((a, b) => a - b)
-  const [landed, setLanded] = useState<Set<number>>(() => new Set(raffle.drawnAt ? places : []))
-  const [rolling, setRolling] = useState<{ position: number; name: string } | null>(null)
-  const [youWon, setYouWon] = useState(() => !!raffle.drawnAt && raffle.winners.some((w) => w.username === me))
-  const [error, setError] = useState<string | null>(null)
-  const alive = useRef(true)
+  const drawRaffle = useAppStore((s) => s.drawRaffle)
+  const play = useDrawShow((s) => s.play)
+  const total = raffle.winners.length
+  const need = minEntriesToDraw(total)
+  const tooFew = raffle.entriesCount < need
+  const places = [...raffle.winners].sort((a, b) => a.position - b.position)
+  const mine = places.filter((w) => !!me && w.username === me)
 
+  // Demo build only: no server to draw, so the app plays its part once
+  const asked = useRef(false)
   useEffect(() => {
-    alive.current = true
-    return () => {
-      alive.current = false
-    }
-  }, [])
+    if (usingRealApi || raffle.drawnAt || asked.current) return
+    asked.current = true
+    drawRaffle(raffle.id).then(
+      () => play(raffle.id),
+      (error: unknown) => console.warn('[draw] demo draw failed', error),
+    )
+  }, [raffle.id, raffle.drawnAt, drawRaffle, play])
 
-  const start = async () => {
-    setPhase('loading')
-    setError(null)
-    try {
-      const res = await drawRaffle(raffle.id)
-      if (!alive.current) return
-      setWinners(res.raffle.winners)
-      setPhase('rolling')
-      const pool = raffle.entrants.length ? raffle.entrants : ['ada_obi', 'tunde_k', 'chidi']
-      // Long lists roll faster so the whole reveal stays around ten seconds
-      const rollMs = Math.max(500, Math.min(1700, 9000 / places.length))
-      for (const position of [...places].reverse()) {
-        sound.play('drumroll')
-        haptics.impact('light')
-        const started = Date.now()
-        let tick = 0
-        while (Date.now() - started < rollMs) {
-          if (!alive.current) return
-          setRolling({ position, name: pool[(tick * 7 + position) % pool.length] })
-          tick += 1
-          await wait(tick % 3 === 0 ? 85 : 60)
-        }
-        const slot = res.raffle.winners.find((w) => w.position === position)
-        setRolling(null)
-        setLanded((prev) => new Set([...prev, position]))
-        sound.play(position === 1 ? 'fanfare' : 'land')
-        haptics.impact(position === 1 ? 'heavy' : 'medium')
-        if (slot?.username === me) haptics.notify('success')
-        await wait(position === 1 ? 300 : Math.min(650, rollMs / 2))
-      }
-      if (!alive.current) return
-      setYouWon(res.youWon)
-      setPhase('done')
-      celebrate()
-      if (res.youWon) sound.play('chime')
-      onRevealed?.(res.youWon)
-    } catch (err) {
-      if (!alive.current) return
-      setError(errorMessage(err))
-      setPhase('error')
-      sound.play('error')
-    }
+  if (!raffle.drawnAt) {
+    return tooFew ? (
+      <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+        <Undo2 size={20} className="mt-0.5 shrink-0 text-sun" />
+        <p className="text-[13.5px] leading-relaxed text-mist">
+          Only {formatInt(raffle.entriesCount)} {raffle.entriesCount === 1 ? 'entry was' : 'entries were'} sold. A draw needs at least {need}, so this raffle is not drawn: every
+          entry is refunded in full, in a few seconds.
+        </p>
+      </div>
+    ) : (
+      <div className="flex flex-col items-center gap-2 rounded-2xl border border-sun/30 bg-sun/10 p-5 text-center">
+        <motion.div animate={{ rotate: [0, -8, 8, 0] }} transition={{ duration: 0.9, repeat: Infinity }}>
+          <Trophy size={26} className="text-sun" />
+        </motion.div>
+        <p className="flex items-center gap-2 font-display text-[16px] font-extrabold">
+          <Spinner className="h-4 w-4" /> Drawing now
+        </p>
+        <p className="text-[13px] text-mist">Keep the app open: the live draw starts here in a few seconds.</p>
+      </div>
+    )
   }
 
   return (
     <div className="flex flex-col gap-3">
-      <AnimatePresence>
-        {phase === 'done' && youWon && (
-          <motion.div
-            initial={{ scale: 0.6, opacity: 0, y: 10 }}
-            animate={{ scale: 1, opacity: 1, y: 0 }}
-            transition={{ type: 'spring', stiffness: 380, damping: 16 }}
-            className="flex items-center gap-3 rounded-2xl bg-sunny p-4 text-ink shadow-glow-sun"
-          >
-            <PartyPopper size={26} />
-            <div>
-              <p className="font-display text-lg font-extrabold leading-tight">You won!</p>
-              <p className="text-[13px] font-semibold opacity-80">Check My wins for your prize details.</p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
+      {mine.length > 0 && (
+        <div className="flex items-center gap-3 rounded-2xl bg-sunny p-4 text-ink shadow-glow-sun">
+          <PartyPopper size={26} />
+          <div>
+            <p className="font-display text-lg font-extrabold leading-tight">You won!</p>
+            <p className="text-[13px] font-semibold opacity-80">{mine.map((w) => w.prizeItem).join(' and ')}. Check the bot for what happens next.</p>
+          </div>
+        </div>
+      )}
       <ol className="flex flex-col gap-2">
-        {places.map((position) => {
-          const slot = (winners.length ? winners : raffle.winners).find((w) => w.position === position)
-          const isLanded = landed.has(position)
-          const isRolling = rolling?.position === position
-          const mine = isLanded && slot?.username === me
+        {places.map((w) => {
+          const isMine = !!me && w.username === me
           return (
-            <motion.li
-              key={position}
-              animate={isLanded && phase !== 'done' ? { scale: [1, 1.04, 1] } : undefined}
-              className={cn(
-                'flex items-center gap-3 rounded-2xl p-3',
-                mine ? 'bg-sun/15 border border-sun/50' : 'bg-white/5 border border-white/5',
-                isRolling && 'border-magenta/50',
-              )}
-            >
-              <span className={cn('flex h-9 min-w-9 shrink-0 items-center justify-center rounded-xl px-1.5 font-display text-[13px] font-extrabold', medalClass(position))}>
-                {prizeLabel(position, places.length)}
+            <li key={w.position} className={cn('flex items-center gap-3 rounded-2xl border p-3', isMine ? 'border-sun/50 bg-sun/15' : 'border-white/5 bg-white/5')}>
+              <span className={cn('flex h-9 min-w-9 shrink-0 items-center justify-center rounded-xl px-1.5 font-display text-[13px] font-extrabold', medalClass(w.position))}>
+                {prizeLabel(w.position, total)}
               </span>
               <div className="min-w-0 flex-1">
-                <div className="h-6 overflow-hidden">
-                  <AnimatePresence mode="popLayout" initial={false}>
-                    {isLanded ? (
-                      <motion.p
-                        key="winner"
-                        initial={{ y: 18, opacity: 0, scale: 0.8 }}
-                        animate={{ y: 0, opacity: 1, scale: 1 }}
-                        transition={{ type: 'spring', stiffness: 500, damping: 18 }}
-                        className={cn('truncate font-display text-[16px] font-extrabold', mine && 'text-sun')}
-                      >
-                        @{slot?.username ?? 'TBD'} {mine && '(you)'}
-                      </motion.p>
-                    ) : isRolling ? (
-                      <motion.p
-                        key={rolling.name}
-                        initial={{ y: 10, opacity: 0.4 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        transition={{ duration: 0.05 }}
-                        className="truncate font-display text-[16px] font-extrabold text-magenta-2"
-                      >
-                        @{rolling.name}
-                      </motion.p>
-                    ) : (
-                      <p key="tbd" className="font-display text-[16px] font-extrabold text-haze">
-                        {phase === 'rolling' ? '. . .' : '@TBD'}
-                      </p>
-                    )}
-                  </AnimatePresence>
-                </div>
-                <p className="truncate text-[12px] text-mist">{slot?.prizeItem}</p>
+                <p className={cn('truncate font-display text-[16px] font-extrabold', isMine && 'text-sun')}>
+                  {winnerName(w)} {isMine && '(you)'}
+                </p>
+                <p className="truncate text-[12px] text-mist">{w.prizeItem}</p>
               </div>
-              {mine && <Trophy size={18} className="text-sun" />}
-            </motion.li>
+              {w.ticket !== null && <span className="nums shrink-0 text-[12px] font-bold text-haze">#{w.ticket}</span>}
+              {isMine && <Trophy size={18} className="shrink-0 text-sun" />}
+            </li>
           )
         })}
       </ol>
-
-      {phase === 'idle' && (
-        <BouncyButton variant="sun" size="lg" block pulse onClick={() => void start()} icon={<Trophy size={18} />}>
-          Reveal the winners
-        </BouncyButton>
-      )}
-      {phase === 'loading' && (
-        <div className="flex items-center justify-center gap-2 py-3 text-[13px] font-semibold text-mist">
-          <Spinner className="h-4 w-4" /> Shuffling the entries
-        </div>
-      )}
-      {phase === 'rolling' && (
-        <p className="text-center text-[13px] font-semibold text-magenta-2">Drawing now</p>
-      )}
-      {phase === 'error' && (
-        <div className="flex flex-col gap-2">
-          <p className="text-[13px] font-medium text-coral">{error}</p>
-          <BouncyButton variant="secondary" onClick={() => void start()}>
-            Try again
-          </BouncyButton>
-        </div>
-      )}
+      <BouncyButton variant="secondary" block onClick={() => play(raffle.id)} icon={<Clapperboard size={17} />}>
+        Watch the draw
+      </BouncyButton>
     </div>
   )
 }

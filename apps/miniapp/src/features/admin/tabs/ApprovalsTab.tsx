@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { AdminApproval } from '@raffwin/shared/admin-types'
-import { adminCall } from '../adminSession'
+import { adminCall, useAdminSession } from '../adminSession'
 import { useAction, useLoad, when } from '../hooks'
 import { askText } from '../ask'
 import { Badge, Button, Empty, Err, Loading, Segmented, TabHeading } from '../ui'
@@ -9,6 +9,11 @@ type Status = 'pending' | 'approved' | 'rejected' | 'failed'
 
 export function ApprovalsTab({ can }: { can: string[] }) {
   const [status, setStatus] = useState<Status>('pending')
+  const meId = useAdminSession((s) => s.me?.id ?? null)
+  /** Marking an admin at risk is agreed by any other admin; everything else needs approvals.decide */
+  const mayDecide = (a: AdminApproval) =>
+    a.requestedByAdminId !== meId &&
+    (a.action === 'admin_risk_flag' || a.action === 'admin_risk_clear' ? (a.payload as { adminId?: string }).adminId !== meId : can.includes('approvals.decide'))
   const { data, error, reload } = useLoad<AdminApproval[]>(`/approvals?status=${status}`, 5_000)
   const action = useAction()
   const decide = async (id: string, verdict: 'approve' | 'reject') => {
@@ -55,7 +60,7 @@ export function ApprovalsTab({ can }: { can: string[] }) {
                   {a.status} by {a.decidedBy} on {when(a.decidedAt)}
                 </p>
               )}
-              {a.status === 'pending' && can.includes('approvals.decide') && (
+              {a.status === 'pending' && mayDecide(a) && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button variant="solid" size="sm" disabled={action.busy} onClick={() => void decide(a.id, 'approve')}>
                     Approve

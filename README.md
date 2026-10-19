@@ -122,8 +122,11 @@ version, rollback, backups and troubleshooting.
 ## Not built yet
 
 - **Buying Raffs with Telegram Stars:** invoices, payment webhooks, refunds, reconciliation.
-- **Draws:** a committed seed, the scheduled draw, winner announcements and a public
-  verification page.
 
-Until both exist, players can browse, enter with credited Raffs and invite friends. Admins
-can credit Raffs through an approved adjustment.
+Until it exists, players enter with credited Raffs; admins credit Raffs through an approved
+adjustment.
+
+Draws exist since 19 Oct (`apps/api/src/services/draw.ts`): a seed committed when a raffle
+opens, the draw a few seconds after the deadline (only with at least 5 entries; below that
+the raffle is refunded in full), Raffs prizes credited, winners told by the bot, and a live
+draw show in every open app (`apps/miniapp/src/features/raffles/LiveDrawShow.tsx`).

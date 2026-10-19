@@ -29,6 +29,11 @@ function ask(question: string): Promise<string> {
 
 async function main() {
   const first = await ask('Master password (hidden): ')
+  // Every sign-in trims what is typed, so a space at either end could never be matched
+  if (first !== first.trim()) {
+    console.error('No spaces at the start or the end, please.')
+    process.exit(2)
+  }
   if (first.length < 16) {
     console.error('Use at least 16 characters.')
     process.exit(2)

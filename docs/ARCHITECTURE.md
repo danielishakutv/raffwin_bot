@@ -132,9 +132,11 @@ commands: `infra/runbook/SERVER-RUNBOOK-raffwin.md`.
    `telegram_payment_charge_id`. Also refunds through approvals, and a nightly
    reconciliation against `getStarTransactions`. The bot already answers `/paysupport`, as
    Telegram requires.
-2. **Draws.** A secret seed with its SHA-256 published when a raffle opens; a scheduled draw
-   at the deadline picking three distinct tickets from the seed and the final count; the
-   seed revealed for a public verification page; winner messages and Raffs prizes credited
-   by the same job.
+2. **Draws: built 19 Oct** (`services/draw.ts`, worker loop every 5 s). The seed is fixed
+   and its SHA-256 published when a raffle opens. At the deadline, with at least
+   `max(5, prizes)` tickets sold, one distinct ticket per place comes from the seed, the
+   raffle id and the count (`DRAW_METHOD` in `@raffwin/shared`); fewer, and the raffle is
+   cancelled and refunded. The seed is published with the winners, shown under "Check this
+   draw". Still to build: a public verification page outside Telegram.
 3. **Offsite backups** (a second location for the nightly dumps) and **analytics** (client
    events, dashboards, exports).

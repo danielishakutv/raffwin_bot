@@ -63,6 +63,8 @@ export interface TelegramWebApp {
   /** Bot API 6.9+. Asks the user to share their own phone number with the bot. */
   requestContact?(callback: (shared: boolean, result?: RequestContactResult) => void): void
   SecureStorage?: SecureStorage
+  /** Bot API 9.0+: per-bot storage on the device, also in desktop apps (same calls as SecureStorage, not encrypted) */
+  DeviceStorage?: SecureStorage
   onEvent(event: string, cb: () => void): void
   offEvent(event: string, cb: () => void): void
 }

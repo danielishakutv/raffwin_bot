@@ -36,6 +36,7 @@ import {
   type UserRow,
 } from '../db/schema'
 import { HttpError } from '../lib/http-error'
+import { newDrawSeed } from '../services/draw'
 import { currentQuote } from '../services/rates'
 import { getAllSettings, putSetting } from '../services/settings'
 import { appendAudit } from './audit'
@@ -149,6 +150,10 @@ export async function updateRaffle(
     if (!row) throw new HttpError('NOT_FOUND', 'No such raffle.')
     if (row.status === 'open') {
       if (!superAdmin) throw new HttpError('FORBIDDEN', 'Only a super admin can change a raffle that is open for entries.')
+      // Past its deadline the draw owns it (services/draw.ts runs within seconds)
+      if (row.deadline.getTime() <= ctx.now()) {
+        throw new HttpError('INVALID_INPUT', 'Entries for this raffle have closed and the draw is running. It can no longer be changed.')
+      }
       if (body.entriesTarget < row.entriesCount) {
         throw new HttpError('INVALID_INPUT', `${row.entriesCount} entries are already sold; the total cannot be lower.`, {
           entriesTarget: `At least ${row.entriesCount}`,
@@ -218,10 +223,15 @@ export async function openRaffle(ctx: AppContext, adminId: string | null, id: st
     }
     const [count] = await tx.select({ n: sql<number>`count(*)::int` }).from(rafflePrizes).where(eq(rafflePrizes.raffleId, id))
     if ((count?.n ?? 0) < 1) throw new HttpError('INVALID_INPUT', 'Add at least one prize before publishing.')
-    await tx.update(raffles).set({ status: 'open', openedAt: sql`now()`, updatedAt: sql`now()` }).where(eq(raffles.id, id))
+    // The draw seed is fixed now and its SHA-256 published, so the result cannot be steered later
+    const { seed, commitment } = newDrawSeed()
+    await tx
+      .update(raffles)
+      .set({ status: 'open', openedAt: sql`now()`, drawSeed: seed, seedCommitment: commitment, updatedAt: sql`now()` })
+      .where(eq(raffles.id, id))
     // The bot tells everyone with new raffle alerts on (queued; sent by the workers)
     const broadcastId = await announceRaffleOpened(tx, row, count?.n ?? 1, adminId)
-    await appendAudit(tx, { adminId, action: 'raffle.open', targetType: 'raffle', targetId: id, after: { broadcastId } })
+    await appendAudit(tx, { adminId, action: 'raffle.open', targetType: 'raffle', targetId: id, after: { broadcastId, commitment } })
   })
   return getRaffle(ctx, id)
 }

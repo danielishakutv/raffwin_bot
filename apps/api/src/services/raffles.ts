@@ -8,6 +8,7 @@ import type { Entry, LiveSnapshot, Raffle, WinnerSlot } from '@raffwin/shared'
 import type { Db } from '../db/client'
 import { entries, rafflePrizes, raffles, users, type EntryRow, type RaffleRow } from '../db/schema'
 import { HttpError } from '../lib/http-error'
+import { publicName } from './draw'
 import { featuresFor } from './features'
 
 const DRAWN_VISIBLE_DAYS = 30
@@ -30,7 +31,7 @@ export async function toRaffles(db: Db, rows: RaffleRow[]): Promise<Raffle[]> {
   if (rows.length === 0) return []
   const ids = rows.map((r) => r.id)
   const prizes = await db
-    .select({ prize: rafflePrizes, winner: users.username })
+    .select({ prize: rafflePrizes, winner: users.username, fullName: users.fullName, tgFirstName: users.tgFirstName })
     .from(rafflePrizes)
     .leftJoin(users, eq(users.id, rafflePrizes.winnerUserId))
     .where(inArray(rafflePrizes.raffleId, ids))
@@ -53,11 +54,16 @@ export async function toRaffles(db: Db, rows: RaffleRow[]): Promise<Raffle[]> {
   return rows.map((r) => {
     const winners: WinnerSlot[] = prizes
       .filter((p) => p.prize.raffleId === r.id)
-      .map((p) => ({
-        position: p.prize.position,
-        prizeItem: p.prize.prizeItem,
-        username: r.status === 'drawn' ? p.winner : null,
-      }))
+      .map((p) => {
+        const drawn = r.status === 'drawn' && p.prize.winnerUserId !== null
+        return {
+          position: p.prize.position,
+          prizeItem: p.prize.prizeItem,
+          username: drawn ? p.winner : null,
+          name: drawn ? publicName({ username: p.winner, fullName: p.fullName, tgFirstName: p.tgFirstName }) : null,
+          ticket: drawn ? p.prize.winnerTicket : null,
+        }
+      })
     return {
       id: r.id,
       prizeName: r.prizeName,
@@ -76,6 +82,7 @@ export async function toRaffles(db: Db, rows: RaffleRow[]): Promise<Raffle[]> {
       winners,
       drawnAt: r.drawnAt?.toISOString() ?? null,
       seedCommitment: r.seedCommitment,
+      drawSeed: r.status === 'drawn' ? r.drawSeed : null,
       entrants: entrantRows.rows.filter((e) => e.raffle_id === r.id).map((e) => e.username),
     }
   })

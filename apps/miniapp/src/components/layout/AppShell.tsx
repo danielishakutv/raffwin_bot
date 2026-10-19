@@ -4,6 +4,7 @@ import { useLocation, useOutlet } from 'react-router-dom'
 import { TabBar } from './TabBar'
 import { cn } from '@/components/ui/cn'
 import { pageVariants } from '@/components/motion'
+import { LiveDrawShow } from '@/features/raffles/LiveDrawShow'
 import { WelcomeBack } from '@/features/welcome/WelcomeBack'
 import { useAppStore } from '@/store/useAppStore'
 
@@ -39,6 +40,8 @@ export function AppShell() {
       {showTabs && <TabBar />}
       {/* "Welcome back! 1 free Raff added", once, after a come-back offer is claimed */}
       <WelcomeBack />
+      {/* A raffle drawn while the app is open (or recently) plays its live draw over any screen */}
+      <LiveDrawShow />
     </div>
   )
 }

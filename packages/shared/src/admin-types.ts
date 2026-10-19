@@ -11,6 +11,10 @@ export interface AdminMe {
   permissions: string[]
   /** How this session signed in: the bot's Open admin button, or the browser sign-in with a code from the bot */
   channel: 'telegram' | 'browser'
+  /** Two admins marked this account at risk: no trusted devices, full checks on every sign-in */
+  atRisk: boolean
+  /** This session came from a trusted device */
+  trustedDevice: boolean
 }
 
 /** POST /admin/v1/auth/web/start: secrets accepted, a 6-digit code went to the admin's bound Telegram */
@@ -29,6 +33,35 @@ export interface AdminLoginResponse {
   /** The session ends after this many minutes without a request (longer for super admins) */
   idleMinutes: number
   admin: AdminMe
+  /** Set when this sign-in trusted the device: keep it on this device only (never send it anywhere else) */
+  deviceToken?: string | null
+}
+
+/** A device an admin has trusted (Settings > My devices) */
+export interface AdminDevice {
+  id: string
+  channel: 'telegram' | 'browser'
+  label: string
+  createdAt: string
+  lastUsedAt: string | null
+  revokedAt: string | null
+  revokedReason: string | null
+  /** The device this session came from */
+  current: boolean
+}
+
+/** GET /admin/v1/team: every admin, as any admin may see them, for marking an account at risk */
+export interface AdminTeamMember {
+  id: string
+  name: string
+  role: AdminRole
+  status: 'active' | 'disabled'
+  atRisk: boolean
+  riskFlaggedAt: string | null
+  riskReason: string | null
+  isMe: boolean
+  /** A request waiting for a second admin, if any */
+  pending: { approvalId: string; action: 'admin_risk_flag' | 'admin_risk_clear'; requestedBy: string; reason: string; requestedByMe: boolean } | null
 }
 
 export interface AdminPrize {
@@ -171,6 +204,8 @@ export type NotificationKind =
   | 'feature'
   | 'raffle_new'
   | 'raffle_cancelled'
+  | 'raffle_drawn'
+  | 'raffle_won'
   | 'transfer'
   | 'system'
 
@@ -191,7 +226,7 @@ export interface AdminNotification {
 
 export interface AdminBroadcast {
   id: string
-  kind: 'announcement' | 'feature' | 'raffle_new' | 'raffle_cancelled'
+  kind: 'announcement' | 'feature' | 'raffle_new' | 'raffle_cancelled' | 'raffle_drawn'
   title: string
   text: string
   openButton: boolean
@@ -236,13 +271,14 @@ export interface AdminEngagement {
 
 export interface AdminApproval {
   id: string
-  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel'
+  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel' | 'admin_risk_flag' | 'admin_risk_clear'
   /** One line a human can approve or reject from */
   summary: string
   payload: Record<string, unknown>
   reason: string
   status: 'pending' | 'approved' | 'rejected' | 'failed'
   requestedBy: string
+  requestedByAdminId: string
   decidedBy: string | null
   decidedAt: string | null
   result: unknown

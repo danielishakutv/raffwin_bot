@@ -24,6 +24,7 @@ import type {
 } from '@/data/types'
 import { bumpDemoRate, isRateValid, type RateQuote } from '@/services/rates'
 import { sound } from '@/services/sound'
+import { useToast } from '@/components/ui/toastStore'
 
 export type RateStatus = 'idle' | 'loading' | 'ready' | 'expired' | 'error'
 
@@ -160,7 +161,15 @@ export const useAppStore = create<AppState>()(
             return !k || (k.drawnAt ?? null) !== (l.drawnAt ?? null) || seen.get(l.id) !== l.version
           })
         if (structural) {
-          set({ raffles: await api.getRaffles() })
+          const next = await api.getRaffles()
+          // A raffle I entered that closed and vanished undrawn was refunded (too few entries to draw)
+          const refunded = raffles.filter(
+            (r) => !r.drawnAt && Date.parse(r.deadline) <= Date.now() && !next.some((n) => n.id === r.id) && get().entries.some((e) => e.raffleId === r.id),
+          )
+          set({ raffles: next })
+          for (const r of refunded) {
+            useToast.getState().show(`${r.prizeName} did not get enough entries to be drawn. Your Raffs for it are back in your balance.`, 'info')
+          }
         } else {
           const byId = new Map(live.raffles.map((l) => [l.id, l]))
           const changed = raffles.some((r) => {

@@ -13,6 +13,7 @@ import { ADMIN_ROLES, adminSessions, adminUsers, type AdminUserRow } from '../db
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
 import { appendAudit } from './audit'
+import { revokeAllDevices } from './devices'
 import { hashPassword, verifyPassword } from './session'
 
 export const createBody = z.object({
@@ -106,7 +107,7 @@ export async function create(
   }
 }
 
-/** New password, shown once; every session of that admin ends. */
+/** New password, shown once; every session of that admin ends and every trusted device is revoked. */
 export async function resetPassword(ctx: AppContext, byAdminId: string, id: string): Promise<{ admin: AdminAccount; password: string }> {
   const password = generatePassword()
   const passwordHash = await hashPassword(password)
@@ -114,7 +115,9 @@ export async function resetPassword(ctx: AppContext, byAdminId: string, id: stri
     const [updated] = await tx.update(adminUsers).set({ passwordHash, updatedAt: sql`now()` }).where(eq(adminUsers.id, id)).returning()
     if (!updated) throw new HttpError('NOT_FOUND', 'No such admin.')
     await tx.update(adminSessions).set({ revokedAt: sql`now()` }).where(eq(adminSessions.adminId, id))
-    await appendAudit(tx, { adminId: byAdminId, action: 'admin.password.reset', targetType: 'admin', targetId: id })
+    // A reset means the old password may be known: no device is trusted on it any more
+    const devicesRevoked = await revokeAllDevices(tx, id, 'password_reset', new Date(ctx.now()))
+    await appendAudit(tx, { adminId: byAdminId, action: 'admin.password.reset', targetType: 'admin', targetId: id, after: { devicesRevoked } })
     return updated
   })
   return { admin: toAccount(row), password }
@@ -132,9 +135,10 @@ export async function setStatus(ctx: AppContext, byAdminId: string, id: string, 
   return toAccount(row)
 }
 
+// Trimmed like every sign-in trims, so the password set here is the one that works there
 export const passwordBody = z.object({
-  current: z.string().min(1).max(200),
-  next: z.string().min(12, 'Use at least 12 characters').max(200),
+  current: z.string().trim().min(1).max(200),
+  next: z.string().trim().min(12, 'Use at least 12 characters').max(200),
 })
 
 /** An admin changes their own password; every other session of theirs ends. */

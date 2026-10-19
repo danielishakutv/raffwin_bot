@@ -9,7 +9,7 @@ import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { Spinner } from '@/components/ui/Spinner'
 import { useNow } from '@/hooks/useNow'
 import { useRate } from '@/hooks/useRate'
-import { prizeLabel, trophyClass, winnersLabel } from '@/data/prizes'
+import { prizeLabel, trophyClass, winnerName, winnersLabel } from '@/data/prizes'
 import { getRaffleStatus, isUrgent, STATUS_LABEL } from '@/data/raffleStatus'
 import type { Raffle } from '@/data/types'
 import { formatDate, formatInt, formatNaira, formatRaffs } from '@/services/format'
@@ -109,7 +109,7 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
               <div key={w.position} className="flex items-center gap-2 text-[13px]">
                 <Trophy size={14} className={trophyClass(w.position)} />
                 <span className="w-10 shrink-0 font-bold text-mist">{prizeLabel(w.position, raffle.winners.length)}</span>
-                <span className="truncate font-bold">@{w.username ?? 'TBD'}</span>
+                <span className="truncate font-bold">{winnerName(w)}</span>
                 <span className="ml-auto truncate text-haze">{w.prizeItem}</span>
               </div>
             ))}
@@ -169,7 +169,7 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
               live && 'animate-pulse-glow',
             )}
           >
-            {live ? 'Enter raffle' : status === 'drawing' ? 'Reveal the winners' : 'See the results'}
+            {live ? 'Enter raffle' : status === 'drawing' ? 'Drawing now' : 'See the winners'}
           </motion.button>
         </div>
       </div>

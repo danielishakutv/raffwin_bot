@@ -200,9 +200,10 @@ export function previewRaffle(d: RaffleDraft, saved: AdminRaffle | null, now = D
     entriesTarget: target,
     description: d.description.trim(),
     rules: bodyFromDraft(d).rules,
-    winners: d.prizes.map((_, i) => ({ position: i + 1, prizeItem: prizeItemOf(d, i) || `Prize ${i + 1}`, username: null })),
+    winners: d.prizes.map((_, i) => ({ position: i + 1, prizeItem: prizeItemOf(d, i) || `Prize ${i + 1}`, username: null, name: null, ticket: null })),
     drawnAt: null,
     seedCommitment: null,
+    drawSeed: null,
     entrants: [],
   }
 }

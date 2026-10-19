@@ -3,6 +3,7 @@
  * Request schemas (zod) are a separate entry: '@raffwin/shared/schemas'.
  */
 export type * from './types'
+export * from './draw'
 export * from './errors'
 export * from './features'
 export * from './phone'
