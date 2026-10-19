@@ -10,6 +10,17 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 
+/**
+ * The references this site makes (checkout.ts). The Paystack account is
+ * shared with other apps, and its webhook is passed on to every one of them,
+ * so anything else is another app's payment: not ours to verify, store or flag.
+ */
+export const OUR_REFERENCE = /^ip_[0-9a-f]{32}$/
+
+export function isOurReference(reference: unknown): reference is string {
+  return typeof reference === 'string' && OUR_REFERENCE.test(reference)
+}
+
 export function paystackSignature(rawBody: Buffer | string, secretKey: string): string {
   return createHmac('sha512', secretKey).update(rawBody).digest('hex')
 }

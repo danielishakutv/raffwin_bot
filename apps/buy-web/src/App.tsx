@@ -4,7 +4,7 @@
  * Raffs are in the game account. Prices and balances come from this site's
  * backend; the page never talks to anything else.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { api, ApiError, int, naira, type Me, type Purchase } from './api'
 import { readReturnedLogin, TelegramLogin } from './TelegramLogin'
 
@@ -14,7 +14,8 @@ type Load = { state: 'loading' } | { state: 'out'; botId: number } | { state: 'i
 
 export function App() {
   const [load, setLoad] = useState<Load>({ state: 'loading' })
-  const paidRef = useMemo(() => (location.pathname === '/paid' ? new URLSearchParams(location.search).get('reference') : null), [])
+  // State, not a memo of the first address: leaving /paid ("Buy more") must take the page back to the shop
+  const [paidRef, setPaidRef] = useState(() => (location.pathname === '/paid' ? new URLSearchParams(location.search).get('reference') : null))
 
   const refresh = useCallback(async () => {
     try {
@@ -29,6 +30,11 @@ export function App() {
       setLoad({ state: 'error', message: error instanceof Error ? error.message : 'Something went wrong.' })
     }
   }, [])
+  const leavePaid = useCallback(() => {
+    history.replaceState(null, '', '/')
+    setPaidRef(null)
+    return refresh()
+  }, [refresh])
   const onAuth = useCallback(
     (user: Record<string, unknown>) => {
       void api.login(user).then(refresh, (error: unknown) => setLoad({ state: 'error', message: error instanceof Error ? error.message : 'Login failed.' }))
@@ -58,7 +64,7 @@ export function App() {
         </Notice>
       )}
       {load.state === 'out' && <SignedOut botId={load.botId} onAuth={onAuth} paying={!!paidRef} />}
-      {load.state === 'in' && (paidRef ? <Paid reference={paidRef} onDone={refresh} /> : <Shop me={load.me} refresh={refresh} />)}
+      {load.state === 'in' && (paidRef ? <Paid reference={paidRef} onDone={leavePaid} /> : <Shop me={load.me} refresh={refresh} />)}
 
       <footer className="mt-auto pt-10 text-center text-[12px] leading-relaxed text-ink/50">
         Payments are processed securely by Paystack. We never see your card details.
@@ -308,10 +314,7 @@ function Paid({ reference, onDone }: { reference: string; onDone: () => Promise<
     }
   }, [reference])
 
-  const home = () => {
-    history.replaceState(null, '', '/')
-    void onDone()
-  }
+  const home = () => void onDone()
 
   if (error) return <Notice tone="error" action={<Button onClick={home}>Back</Button>}>{error}</Notice>
   if (!p) return <Skeleton />

@@ -8,6 +8,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../context'
 import { credits, quotes } from '../db/schema'
+import { OUR_REFERENCE } from '../lib/paystack'
 import { HttpError } from '../lib/util'
 import { saveDetails, signIn, signOut, toBuyer } from '../services/auth'
 import { accountOf, NO_ACCOUNT, recentQuotes, resumeCheckout, startCheckout, toPurchase } from '../services/checkout'
@@ -15,7 +16,7 @@ import { settlePayment } from '../services/payments'
 import { kickCredits } from '../services/worker'
 import { buyerOf, clearedSessionCookie, requestMeta, requireBuyer, sessionCookie } from './middleware'
 
-const referenceParam = z.string().regex(/^ip_[0-9a-f]{32}$/, 'No such payment.')
+const referenceParam = z.string().regex(OUR_REFERENCE, 'No such payment.')
 
 /** How often the return page may make us ask Paystack about one payment */
 const CHECK_EVERY_MS = 10_000

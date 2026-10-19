@@ -8,11 +8,15 @@
  *   charge.success                        settle it (payments.ts), then deliver
  *   refund.processed, charge.dispute.*    flag it for an admin
  *   anything else                         recorded, ignored
+ *
+ * Only events for our own references (ip_...) are recorded or acted on. The
+ * Paystack account is shared, and every app's events are passed on to us
+ * with Paystack's signature intact; the rest are answered 200 and dropped.
  */
 import express, { type Router } from 'express'
 import type { AppContext } from '../context'
 import { webhookEvents } from '../db/schema'
-import { verifyPaystackSignature } from '../lib/paystack'
+import { isOurReference, verifyPaystackSignature } from '../lib/paystack'
 import { raiseFlag } from '../services/flags'
 import { settlePayment } from '../services/payments'
 import { recordSecurity } from '../services/security'
@@ -64,11 +68,15 @@ export function webhookRoutes(ctx: AppContext): Router {
     }
     const event = typeof body.event === 'string' ? body.event.slice(0, 64) : null
     const reference = body.data?.reference ?? body.data?.transaction_reference ?? body.data?.transaction?.reference ?? null
-    const ref = typeof reference === 'string' && /^[A-Za-z0-9_.=-]{1,100}$/.test(reference) ? reference : null
+    if (!isOurReference(reference)) {
+      // Another app's payment on the shared account, passed on to everyone: acknowledged, never kept
+      res.status(200).end()
+      return
+    }
+    const ref = reference
     await ctx.db.insert(webhookEvents).values({ event, reference: ref, signatureOk: true, ipHash: meta.ipHash })
     res.status(200).end()
 
-    if (!ref) return
     if (event === 'charge.success') {
       background(ctx, async () => {
         const outcome = await settlePayment(ctx, ref, 'webhook')

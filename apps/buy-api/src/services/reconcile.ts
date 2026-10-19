@@ -1,6 +1,7 @@
 /**
- * Daily reconciliation: every successful Paystack payment in a window is
- * matched against what we recorded. A webhook that never arrived (and a
+ * Daily reconciliation: every successful Paystack payment in a window under
+ * one of our references (the account is shared with other apps) is matched
+ * against what we recorded. A webhook that never arrived (and a
  * buyer who never came back to the site) would otherwise leave a paid
  * payment uncredited for ever.
  *
@@ -16,6 +17,7 @@
 import { and, eq, isNotNull } from 'drizzle-orm'
 import type { AppContext } from '../context'
 import { payments, reconcileRuns } from '../db/schema'
+import { isOurReference } from '../lib/paystack'
 import { lagos, lagosMidnight } from '../lib/util'
 import { settlePayment } from './payments'
 
@@ -33,6 +35,8 @@ export async function reconcile(ctx: AppContext, from: Date, to: Date, day: stri
       const batch = await ctx.paystack.listSuccessful(from, to, page)
       pages = batch.pageCount
       for (const tx of batch.transactions) {
+        // The account is shared: other apps' payments are theirs to reconcile
+        if (!isOurReference(tx.reference)) continue
         result.seen += 1
         const [known] = await ctx.db.select({ id: payments.id }).from(payments).where(eq(payments.reference, tx.reference))
         if (known) continue

@@ -168,6 +168,18 @@ describe('a purchase', () => {
     expect(bad.length).toBeGreaterThanOrEqual(2)
   })
 
+  it("another app's event, passed on from the shared account: answered 200, nothing kept or flagged", async () => {
+    const before = (await db.select().from(webhookEvents)).length
+    const security = (await db.select().from(securityEvents)).length
+    paystack.foreign('WAL-1e2f3a4b', 500_000, new Date())
+    const res = await webhook(http, chargeSuccess('WAL-1e2f3a4b'))
+    expect(res.status).toBe(200)
+    await settled()
+    expect((await db.select().from(webhookEvents)).length).toBe(before)
+    expect((await db.select().from(securityEvents)).length).toBe(security)
+    expect(await db.select().from(flags).where(eq(flags.reference, 'WAL-1e2f3a4b'))).toEqual([])
+  })
+
   it('a signed webhook for an unpaid transaction credits nothing: verify decides', async () => {
     const b = await buyer()
     const { reference } = (await b.post('/api/checkout', { naira: 1000 })).body as { reference: string }
@@ -313,11 +325,14 @@ describe('delivery to the game', () => {
 })
 
 describe('reconciliation', () => {
-  it('credits a paid payment nobody told us about, and flags one with no quote', async () => {
+  it('credits a paid payment nobody told us about, flags one of ours with no quote, leaves other apps alone', async () => {
     const b = await buyer()
     const { reference } = (await b.post('/api/checkout', { naira: 3000 })).body as { reference: string }
     paystack.pay(reference)
-    paystack.foreign('ps_manual_payment_77', 250_000, new Date())
+    const lost = `ip_${'7'.repeat(32)}`
+    paystack.foreign(lost, 250_000, new Date())
+    // The account is shared: another app's payment is not ours to flag
+    paystack.foreign('TOKO-course-payment-12', 2_500_000, new Date())
     const from = new Date(Date.now() - 86_400_000)
     const to = new Date(Date.now() + 60_000)
     const r = await reconcile(ctx, from, to, null)
@@ -325,13 +340,15 @@ describe('reconciliation', () => {
     expect(r.flagged).toBeGreaterThanOrEqual(1)
     await deliverCredits(ctx)
     expect(await creditOf(reference)).toMatchObject({ status: 'delivered' })
-    const [f] = await db.select().from(flags).where(eq(flags.reference, 'ps_manual_payment_77'))
+    const [f] = await db.select().from(flags).where(eq(flags.reference, lost))
     expect(f?.kind).toBe('unmatched')
+    expect(await db.select().from(flags).where(eq(flags.reference, 'TOKO-course-payment-12'))).toEqual([])
     // Run again: nothing new
     const again = await reconcile(ctx, from, to, null)
     expect(again).toMatchObject({ recovered: 0, flagged: 0 })
     await reportFlags(ctx)
-    expect(main.flags.some((x) => x.reference === 'ps_manual_payment_77' && x.kind === 'unmatched')).toBe(true)
+    expect(main.flags.some((x) => x.reference === lost && x.kind === 'unmatched')).toBe(true)
+    expect(main.flags.some((x) => x.reference === 'TOKO-course-payment-12')).toBe(false)
   })
 })
 

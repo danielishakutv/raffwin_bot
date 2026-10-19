@@ -8,7 +8,7 @@
  *   payments        what Paystack confirmed for a quote, after our own verify call
  *   credits         the outbox to the main API: pending until it confirms
  *   flags           payments a person must settle, reported to the main API's admins
- *   webhook_events  every webhook received, signed or not
+ *   webhook_events  every webhook for one of our references, and every unsigned one
  *   security_events failed signatures, mismatches, guessing
  *   reconcile_runs  the daily comparison with Paystack
  */
