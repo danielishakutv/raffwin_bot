@@ -214,6 +214,7 @@ export type NotificationKind =
   | 'credit'
   | 'purchase'
   | 'transfer'
+  | 'referral'
   | 'system'
 
 export interface AdminNotification {

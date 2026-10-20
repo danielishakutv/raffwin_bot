@@ -814,6 +814,8 @@ export const NOTIFICATION_KINDS = [
   /** Raffs bought on the sales site arrived */
   'purchase',
   'transfer',
+  /** To a referrer: someone joined with their link, or one of their referrals topped up */
+  'referral',
   'system',
 ] as const
 

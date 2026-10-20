@@ -39,6 +39,7 @@ import { post } from './ledger'
 import { enqueue, openAppButton } from './notify'
 import { currentQuote } from './rates'
 import { getSetting, salesSettings } from './settings'
+import { tellReferrerTopUp } from './referral-notices'
 
 /** How long after its hour a quote can still be what a payment is credited at (30 min to pay + 2 h to confirm + the hour itself, with room) */
 export const QUOTE_MAX_AGE_MS = 4 * 3_600_000
@@ -216,6 +217,7 @@ export async function creditPurchase(ctx: AppContext, c: CreditRequest): Promise
         buttons: button ? [[button]] : null,
         dedupeKey: `purchase:${id}`,
       })
+      await tellReferrerTopUp(ctx, tx, user, raffs, `purchase:${id}`)
       return { ok: true as const, response: { status: 'credited' as const, creditId: id, raffs, balance: entry.balanceAfter } }
     })
   } catch (error) {

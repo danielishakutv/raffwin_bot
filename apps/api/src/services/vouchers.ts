@@ -22,6 +22,7 @@ import { recordSecurityEvent } from '../lib/security-events'
 import type { RequestMeta } from '../context'
 import { requireFeature } from './features'
 import { post, type Tx } from './ledger'
+import { tellReferrerTopUp } from './referral-notices'
 
 export const VOUCHER_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
 export const VOUCHER_LENGTH = 16
@@ -120,6 +121,11 @@ export async function redeemVoucher(ctx: AppContext, userId: string, input: stri
       .update(vouchers)
       .set({ status: 'redeemed', redeemedByUserId: userId, redeemedAt: at, ledgerId: entry.id })
       .where(eq(vouchers.id, v.v.id))
+    const [player] = await tx
+      .select({ id: users.id, username: users.username, fullName: users.fullName, tgFirstName: users.tgFirstName, referredByUserId: users.referredByUserId })
+      .from(users)
+      .where(eq(users.id, userId))
+    if (player) await tellReferrerTopUp(ctx, tx, player, v.batch.valueRaffs, `voucher:${v.v.id}`)
     return { ok: true as const, raffs: v.batch.valueRaffs, balance: entry.balanceAfter, transactionId: entry.id }
   })
   if (!outcome.ok) return wrong(outcome.why, code.slice(-4))

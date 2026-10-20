@@ -79,6 +79,14 @@ export const FEATURES = {
     audience: 'automation',
     announce: null,
   },
+  referral_alerts: {
+    name: 'Referral alerts',
+    description:
+      'The bot tells a referrer when someone joins with their link (what they can earn) and when one of their referrals tops up with a purchase or voucher (up to 10% of it, earned as the Raffs are spent on entries).',
+    defaultEnabled: true,
+    audience: 'automation',
+    announce: null,
+  },
   require_phone_for_entry: {
     name: 'Phone needed to enter',
     description: 'Players must share their phone number through Telegram before entering a raffle, so winners can always be reached.',

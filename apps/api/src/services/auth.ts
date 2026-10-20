@@ -14,6 +14,7 @@ import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
 import { readInitDataUser, verifyTelegramData, type InitDataUser } from '../lib/telegram-auth'
 import { activityFields } from './engagement'
+import { tellReferrerJoined } from './referral-notices'
 
 export interface SessionTokens {
   accessToken: string
@@ -177,7 +178,14 @@ async function upsertTelegramUser(
           signedUpAt: now,
         })
         .returning()
-      if (row) return row
+      if (row) {
+        if (referrerId) {
+          await tellReferrerJoined(ctx, ctx.db, referrerId, row).catch((error: unknown) =>
+            ctx.log.error({ err: error, userId: row.id, referrerId }, 'could not queue the referrer message; the sign-up stands'),
+          )
+        }
+        return row
+      }
     } catch (error) {
       const constraint = uniqueViolation(error)
       if (constraint === 'users_username_key') username = generatedUsername()

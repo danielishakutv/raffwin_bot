@@ -345,6 +345,7 @@ const KINDS: { value: '' | NotificationKind; label: string }[] = [
   { value: 'transfer', label: 'Raffs received' },
   { value: 'credit', label: 'Admin credits' },
   { value: 'purchase', label: 'Purchases' },
+  { value: 'referral', label: 'Referral alerts' },
   { value: 'system', label: 'System' },
 ]
 type Status = '' | AdminNotification['status']
