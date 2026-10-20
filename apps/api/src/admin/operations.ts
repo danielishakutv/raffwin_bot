@@ -62,10 +62,10 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
       ? (await ctx.db.select({ id: raffles.id, prizeName: raffles.prizeName }).from(raffles).where(inArray(raffles.id, sourceIds))).map((s) => [s.id, s.prizeName])
       : [],
   )
-  // Who deleted the deleted ones
-  const deleterIds = [...new Set(rows.map((r) => r.deletedByAdminId).filter((x): x is string => !!x))]
-  const deleters = new Map(
-    deleterIds.length ? (await ctx.db.select({ id: adminUsers.id, name: adminUsers.name }).from(adminUsers).where(inArray(adminUsers.id, deleterIds))).map((a) => [a.id, a.name]) : [],
+  // Who archived the archived ones
+  const archiverIds = [...new Set(rows.map((r) => r.archivedByAdminId).filter((x): x is string => !!x))]
+  const archivers = new Map(
+    archiverIds.length ? (await ctx.db.select({ id: adminUsers.id, name: adminUsers.name }).from(adminUsers).where(inArray(adminUsers.id, archiverIds))).map((a) => [a.id, a.name]) : [],
   )
   return rows.map((r) => ({
     id: r.id,
@@ -104,47 +104,60 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
     drawnAt: r.drawnAt?.toISOString() ?? null,
     cancelledAt: r.cancelledAt?.toISOString() ?? null,
     deletedAt: r.deletedAt?.toISOString() ?? null,
-    deletedBy: r.deletedAt ? (r.deletedByAdminId ? (deleters.get(r.deletedByAdminId) ?? 'an admin') : 'the system') : null,
+    archivedAt: r.archivedAt?.toISOString() ?? null,
+    archivedBy: r.archivedAt ? (archivers.get(r.archivedByAdminId ?? '') ?? 'an admin') : null,
     createdAt: r.createdAt.toISOString(),
   }))
 }
 
-/** Every raffle not deleted (optionally one status), or with 'deleted' only the deleted ones, most recently deleted first */
-export async function listRaffles(ctx: AppContext, status?: RaffleRow['status'] | 'deleted'): Promise<AdminRaffle[]> {
+/**
+ * The admin raffle list. Deleted raffles are never in it. Without 'archived':
+ * every raffle not archived (optionally one status); with it, only the
+ * archived ones, most recently archived first.
+ */
+export async function listRaffles(ctx: AppContext, status?: RaffleRow['status'] | 'archived'): Promise<AdminRaffle[]> {
   const rows =
-    status === 'deleted'
-      ? await ctx.db.select().from(raffles).where(isNotNull(raffles.deletedAt)).orderBy(desc(raffles.deletedAt)).limit(500)
+    status === 'archived'
+      ? await ctx.db.select().from(raffles).where(and(isNull(raffles.deletedAt), isNotNull(raffles.archivedAt))).orderBy(desc(raffles.archivedAt)).limit(500)
       : await ctx.db
           .select()
           .from(raffles)
-          .where(and(isNull(raffles.deletedAt), status ? eq(raffles.status, status) : undefined))
+          .where(and(isNull(raffles.deletedAt), isNull(raffles.archivedAt), status ? eq(raffles.status, status) : undefined))
           .orderBy(desc(raffles.createdAt))
           .limit(500)
   return toAdminRaffles(ctx, rows)
 }
 
-/** A deleted raffle cannot be edited, published or cancelled until it is restored */
+/** A deleted raffle can no longer be edited, published or cancelled */
 function refuseDeleted(row: RaffleRow): void {
-  if (row.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle is deleted. Restore it first.')
+  if (row.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle has been deleted.')
 }
 
 /**
- * Brings a deleted raffle back to the admin list, as it was: a refunded one
- * stays cancelled (nobody is charged again), a drawn one shows its winners to
- * players again, a draft is a draft.
+ * Archive: a drawn or cancelled raffle leaves the Mini App for every player
+ * (entrants and winners included) and moves to Archived in the admin.
+ * Unarchive puts it back exactly as it was. Nothing about money changes.
  */
-export async function restoreRaffle(ctx: AppContext, adminId: string, id: string, reason: string): Promise<AdminRaffle> {
+export async function setArchived(ctx: AppContext, adminId: string, id: string, archive: boolean, reason: string): Promise<AdminRaffle> {
   await ctx.db.transaction(async (tx) => {
     const [row] = await tx.select().from(raffles).where(eq(raffles.id, id)).for('update')
-    if (!row) throw new HttpError('NOT_FOUND', 'No such raffle.')
-    if (!row.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle is not deleted.')
-    await tx.update(raffles).set({ deletedAt: null, deletedByAdminId: null, updatedAt: sql`now()` }).where(eq(raffles.id, id))
+    if (!row || row.deletedAt) throw new HttpError('NOT_FOUND', 'No such raffle.')
+    if (archive) {
+      if (row.archivedAt) throw new HttpError('INVALID_INPUT', 'This raffle is already archived.')
+      if (row.status !== 'drawn' && row.status !== 'cancelled') {
+        throw new HttpError('INVALID_INPUT', `Only a drawn or cancelled raffle can be archived; this one is ${row.status}.`)
+      }
+    } else if (!row.archivedAt) throw new HttpError('INVALID_INPUT', 'This raffle is not archived.')
+    await tx
+      .update(raffles)
+      .set(archive ? { archivedAt: new Date(ctx.now()), archivedByAdminId: adminId, updatedAt: sql`now()` } : { archivedAt: null, archivedByAdminId: null, updatedAt: sql`now()` })
+      .where(eq(raffles.id, id))
     await appendAudit(tx, {
       adminId,
-      action: 'raffle.restore',
+      action: archive ? 'raffle.archive' : 'raffle.unarchive',
       targetType: 'raffle',
       targetId: id,
-      before: { deletedAt: row.deletedAt.toISOString(), deletedByAdminId: row.deletedByAdminId },
+      before: { archivedAt: row.archivedAt?.toISOString() ?? null, archivedByAdminId: row.archivedByAdminId },
       after: { status: row.status, reason },
     })
   })

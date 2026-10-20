@@ -2,10 +2,10 @@
  * Raffles as players see them, in the shared Raffle shape. Drafts and
  * cancelled raffles are never shown; drawn raffles stay visible for 30 days,
  * or for as long as the player holds an entry in them. A raffle an admin
- * deleted leaves the public list but stays with the players who entered it,
- * so their entries and wins never lose their raffle.
+ * deleted or archived is never shown to anyone, entrants and winners
+ * included: not in the list, not on its own page, not in My entries.
  */
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
 import type { Entry, LiveSnapshot, Raffle, WinnerSlot } from '@raffwin/shared'
 import type { Db } from '../db/client'
 import { entries, rafflePrizes, raffles, users, type EntryRow, type RaffleRow } from '../db/schema'
@@ -16,6 +16,9 @@ import { featuresForLive } from './features'
 
 const DRAWN_VISIBLE_DAYS = 30
 const ENTRANTS_SHOWN = 40
+
+/** Neither deleted nor archived by an admin: the only raffles a player ever sees */
+const shownToPlayers = and(isNull(raffles.deletedAt), isNull(raffles.archivedAt))
 
 export function toEntry(row: EntryRow): Entry {
   return {
@@ -97,7 +100,7 @@ async function publicRaffles(db: Db, now: number): Promise<Raffle[]> {
   const rows = await db
     .select()
     .from(raffles)
-    .where(and(isNull(raffles.deletedAt), or(inArray(raffles.status, ['open', 'drawing']), and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff)))))
+    .where(and(shownToPlayers, or(inArray(raffles.status, ['open', 'drawing']), and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff)))))
     .orderBy(asc(raffles.deadline))
   return toRaffles(db, rows)
 }
@@ -105,8 +108,8 @@ async function publicRaffles(db: Db, now: number): Promise<Raffle[]> {
 /**
  * Everything a player sees: the public list (from the shared cache, so a
  * crowd opening the app at once after a draw costs one build of it), plus any
- * drawn raffle this player holds an entry in that the public list no longer
- * carries (older than 30 days, or deleted by an admin), which is rare and cheap.
+ * drawn raffle over 30 days old that this player holds an entry in, which is
+ * rare and cheap.
  */
 export async function listForPlayer(db: Db, userId: string, now: number, cache?: SharedCache): Promise<Raffle[]> {
   const cutoff = new Date(now - DRAWN_VISIBLE_DAYS * 86_400_000)
@@ -116,7 +119,7 @@ export async function listForPlayer(db: Db, userId: string, now: number, cache?:
     db
       .select()
       .from(raffles)
-      .where(and(eq(raffles.status, 'drawn'), inArray(raffles.id, mine), or(sql`${raffles.drawnAt} <= ${cutoff}`, isNotNull(raffles.deletedAt)))),
+      .where(and(shownToPlayers, eq(raffles.status, 'drawn'), inArray(raffles.id, mine), sql`${raffles.drawnAt} <= ${cutoff}`)),
   ])
   if (olderRows.length === 0) return shared
   const seen = new Set(shared.map((r) => r.id))
@@ -124,14 +127,12 @@ export async function listForPlayer(db: Db, userId: string, now: number, cache?:
   return [...shared, ...older].sort((a, b) => Date.parse(a.deadline) - Date.parse(b.deadline))
 }
 
-export async function getForPlayer(db: Db, raffleId: string, userId: string): Promise<Raffle> {
+export async function getForPlayer(db: Db, raffleId: string): Promise<Raffle> {
   const [row] = await db
     .select()
     .from(raffles)
-    .where(and(eq(raffles.id, raffleId), inArray(raffles.status, ['open', 'drawing', 'drawn'])))
-  // A deleted raffle is still there for the players who entered it, and nobody else
-  const entered = async () => (await db.select({ id: entries.id }).from(entries).where(and(eq(entries.raffleId, raffleId), eq(entries.userId, userId))).limit(1)).length > 0
-  if (!row || (row.deletedAt && !(await entered()))) throw new HttpError('NOT_FOUND', 'That raffle no longer exists.')
+    .where(and(eq(raffles.id, raffleId), shownToPlayers, inArray(raffles.status, ['open', 'drawing', 'drawn'])))
+  if (!row) throw new HttpError('NOT_FOUND', 'That raffle no longer exists.')
   const [raffle] = await toRaffles(db, [row])
   return raffle as Raffle
 }
@@ -152,7 +153,7 @@ async function liveRaffles(db: Db, now: number): Promise<LiveRaffle[]> {
       version: sql<string>`md5(concat_ws('|', ${raffles.prizeName}, ${raffles.model}, ${raffles.category}, ${raffles.kind}, ${raffles.hue}, coalesce(${raffles.imageUrl}, ''), ${raffles.marketPriceNaira}, ${raffles.entryPriceRaffs}, ${raffles.description}, ${raffles.rules}::text, (select string_agg(p.position || ':' || p.prize_item || ':' || p.prize_type || ':' || p.raffs_value, ',' order by p.position) from raffle_prizes p where p.raffle_id = "raffles"."id")))`,
     })
     .from(raffles)
-    .where(and(isNull(raffles.deletedAt), or(inArray(raffles.status, ['open', 'drawing']), and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff)))))
+    .where(and(shownToPlayers, or(inArray(raffles.status, ['open', 'drawing']), and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff)))))
   return rows.map((r) => ({
     id: r.id,
     entriesCount: r.entriesCount,
@@ -205,13 +206,18 @@ export async function liveSnapshot(
   }
 }
 
-/** A player's entries, newest first, each with enough of its raffle to show it even once the raffle has left the list */
+/**
+ * A player's entries, newest first, each with enough of its raffle to show it
+ * even once the raffle has left the list (refunded). Entries in a raffle an
+ * admin deleted or archived are left out: that raffle is gone from the app.
+ * The Raffs lines (entry, refund, prize) stay in the wallet history, which must add up.
+ */
 export async function entriesForPlayer(db: Db, userId: string, limit = 200): Promise<Entry[]> {
   const rows = await db
     .select({ e: entries, r: { prizeName: raffles.prizeName, kind: raffles.kind, hue: raffles.hue, imageUrl: raffles.imageUrl, status: raffles.status } })
     .from(entries)
     .innerJoin(raffles, eq(raffles.id, entries.raffleId))
-    .where(eq(entries.userId, userId))
+    .where(and(eq(entries.userId, userId), shownToPlayers))
     .orderBy(desc(entries.createdAt))
     .limit(limit)
   return rows.map(({ e, r }) => ({

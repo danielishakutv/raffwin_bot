@@ -68,7 +68,8 @@ export interface Entry {
   createdAt: string
   /**
    * The raffle this entry was for, so the entry stays in the player's history
-   * after the raffle leaves the list (refunded, or deleted by an admin).
+   * after the raffle leaves the list (refunded). Entries in a raffle an admin
+   * deleted or archived are not sent at all.
    * refunded = the raffle was cancelled and this entry paid back in full.
    */
   raffle?: { prizeName: string; kind: PrizeKind; hue: number; imageUrl: string | null; refunded: boolean }

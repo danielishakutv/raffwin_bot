@@ -293,12 +293,18 @@ export const raffles = pgTable(
     drawnAt: timestamp('drawn_at', { withTimezone: true }),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
     /**
-     * Deleted by an admin (20 Oct): gone from the admin list and the public
-     * raffles, never from the database. Entries, refunds, winners and the
-     * audit trail all stay, and players who entered still see it in their history.
+     * Deleted by an admin (20 Oct): gone from the Mini App for every player
+     * (entrants and winners included) and from the admin raffle list. Never
+     * from the database: entries, ledger lines, winners and the audit trail stay.
      */
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     deletedByAdminId: uuid('deleted_by_admin_id'),
+    /**
+     * Archived (drawn or cancelled raffles only): gone from the Mini App for
+     * every player, still in the admin under Archived, and can be unarchived.
+     */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    archivedByAdminId: uuid('archived_by_admin_id'),
     createdByAdminId: uuid('created_by_admin_id'),
     /** "Run again": the raffle this draft was copied from (which itself never changes) */
     copiedFromRaffleId: uuid('copied_from_raffle_id').references((): AnyPgColumn => raffles.id),

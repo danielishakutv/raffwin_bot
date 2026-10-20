@@ -41,7 +41,7 @@ export function EntriesPage() {
         <motion.ul variants={staggerContainer} initial="hidden" animate="show" className="flex flex-col gap-2">
           {entries.map((e) => {
             const raffle = raffles.find((r) => r.id === e.raffleId)
-            // Gone from the list (refunded, or deleted by Raffle Win): still my history, from the summary the server keeps
+            // Gone from the list (refunded): still my history, from the summary the server sends
             if (!raffle) return e.raffle ? <PastEntry key={e.id} entry={e} past={e.raffle} /> : null
             const status = getRaffleStatus(raffle, now)
             return (

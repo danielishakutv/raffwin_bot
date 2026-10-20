@@ -164,12 +164,13 @@ export const useAppStore = create<AppState>()(
             return !k || (k.drawnAt ?? null) !== (l.drawnAt ?? null) || seen.get(l.id) !== l.version
           })
         if (structural) {
-          const next = await api.getRaffles()
+          // My entries too: a raffle deleted or archived by an admin leaves My entries with it
+          const [next, entries] = await Promise.all([api.getRaffles(), api.getEntries()])
           // A raffle I entered that closed and vanished undrawn was refunded (too few entries to draw)
           const refunded = raffles.filter(
             (r) => !r.drawnAt && Date.parse(r.deadline) <= Date.now() && !next.some((n) => n.id === r.id) && get().entries.some((e) => e.raffleId === r.id),
           )
-          set({ raffles: next })
+          set({ raffles: next, entries })
           for (const r of refunded) {
             useToast.getState().show(`${r.prizeName} did not get enough entries to be drawn. Your Raffs for it are back in your balance.`, 'info')
           }

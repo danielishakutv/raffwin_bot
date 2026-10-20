@@ -102,10 +102,12 @@ export interface AdminRaffle {
   openedAt: string | null
   drawnAt: string | null
   cancelledAt: string | null
-  /** Deleted from the admin list and the public raffles; every record behind it is kept */
+  /** Deleted: gone from the admin list and the Mini App; every record behind it is kept in the database */
   deletedAt: string | null
-  /** The admin who deleted it, or 'the system' */
-  deletedBy: string | null
+  /** Archived (drawn or cancelled only): gone from the Mini App, kept here under Archived */
+  archivedAt: string | null
+  /** The admin who archived it */
+  archivedBy: string | null
   createdAt: string
 }
 

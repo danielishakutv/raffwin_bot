@@ -76,7 +76,7 @@ export function summarise(action: Action, payload: Record<string, unknown>): str
       const refund = p.status === 'open' && p.entriesCount > 0
       return refund
         ? `Delete "${p.prizeName}" and refund ${p.entriesCount} entr${p.entriesCount === 1 ? 'y' : 'ies'}`
-        : `Delete "${p.prizeName}" (${p.status}); its history is kept`
+        : `Delete "${p.prizeName}" (${p.status}) from the app and the admin`
     }
     case 'admin_risk_flag': {
       const p = payload as unknown as Payloads['admin_risk_flag']
@@ -453,8 +453,8 @@ export async function cancelRaffle(
 }
 
 /**
- * Deletes a raffle from the admin list and the public raffles, keeping every
- * row behind it (raffles_no_delete refuses a real DELETE). A raffle still open
+ * Deletes a raffle from the admin list and from the Mini App for every player,
+ * keeping every row behind it (raffles_no_delete refuses a real DELETE). A raffle still open
  * for entries is first cancelled with cancelRaffle, so every entry is refunded
  * in full and the entrants told by the bot; drafts, drawn and cancelled raffles
  * are only marked. Past its deadline an open raffle belongs to the draw, so it

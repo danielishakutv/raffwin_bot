@@ -143,7 +143,7 @@ export function v1Routes(ctx: AppContext): Router {
   router.get('/raffles/:id', authed, async (req, res) => {
     const id = z.string().uuid().safeParse(req.params.id)
     if (!id.success) throw new HttpError('NOT_FOUND', 'That raffle no longer exists.')
-    res.json(await raffles.getForPlayer(ctx.db, id.data, me(req).id))
+    res.json(await raffles.getForPlayer(ctx.db, id.data))
   })
 
   router.post('/entries', authed, async (req, res) => {

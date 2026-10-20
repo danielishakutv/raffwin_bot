@@ -171,7 +171,7 @@ export function adminRoutes(ctx: AppContext): Router {
   /* Raffles ---------------------------------------------------------------- */
 
   r.get('/raffles', authed, perm('raffles.read'), async (req, res) => {
-    const status = z.enum(['draft', 'open', 'drawing', 'drawn', 'cancelled', 'deleted']).optional().parse(req.query.status || undefined)
+    const status = z.enum(['draft', 'open', 'drawing', 'drawn', 'cancelled', 'archived']).optional().parse(req.query.status || undefined)
     res.json(await ops.listRaffles(ctx, status))
   })
   r.get('/raffles/:id', authed, perm('raffles.read'), async (req, res) => {
@@ -224,15 +224,16 @@ export function adminRoutes(ctx: AppContext): Router {
     if (raffle.status === 'drawn' || raffle.status === 'cancelled') {
       throw new HttpError('INVALID_INPUT', `This raffle is already ${raffle.status}.`)
     }
-    if (raffle.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle is deleted. Restore it first.')
+    if (raffle.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle has been deleted.')
     await askOrRun(req, res, 'raffle_cancel', { raffleId: id, prizeName: raffle.prizeName, entriesCount: raffle.entriesCount }, reason)
     forgetRaffles(ctx.cache)
   })
   /**
-   * Delete: off the admin list and the public raffles, every record kept. A
-   * draft (nothing sold, never seen) goes at once for anyone who can write
-   * raffles; anything players have seen is a second admin's decision unless a
-   * super admin does it, and an open raffle is refunded in full first.
+   * Delete: gone from the admin list and from the Mini App for every player,
+   * while every row behind it stays in the database. A draft (nothing sold,
+   * never seen) goes at once for anyone who can write raffles; anything
+   * players have seen is a second admin's decision unless a super admin does
+   * it, and an open raffle is refunded in full first.
    */
   r.post('/raffles/:id/delete', authed, perm('raffles.write'), async (req, res) => {
     const { reason } = reasonBody.parse(req.body)
@@ -252,9 +253,15 @@ export function adminRoutes(ctx: AppContext): Router {
     await askOrRun(req, res, 'raffle_delete', { raffleId: id, prizeName: raffle.prizeName, status: raffle.status, entriesCount: raffle.entriesCount }, reason)
     forgetRaffles(ctx.cache)
   })
-  r.post('/raffles/:id/restore', authed, perm('raffles.write'), async (req, res) => {
+  // Archive: a drawn or cancelled raffle leaves the Mini App but stays here under Archived
+  r.post('/raffles/:id/archive', authed, perm('raffles.write'), async (req, res) => {
     const { reason } = reasonBody.parse(req.body)
-    res.json(await ops.restoreRaffle(ctx, adminId(req), idParam(req), reason))
+    res.json(await ops.setArchived(ctx, adminId(req), idParam(req), true, reason))
+    forgetRaffles(ctx.cache)
+  })
+  r.post('/raffles/:id/unarchive', authed, perm('raffles.write'), async (req, res) => {
+    const { reason } = reasonBody.parse(req.body)
+    res.json(await ops.setArchived(ctx, adminId(req), idParam(req), false, reason))
     forgetRaffles(ctx.cache)
   })
 
