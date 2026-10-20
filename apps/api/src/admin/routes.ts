@@ -23,6 +23,8 @@ import {
   salesOptionsBody,
   voucherBatchBody,
   voucherCodeBody,
+  deletePlayerBody,
+  resetBody,
 } from '@raffwin/shared/admin-schemas'
 import { cursorQuery } from '@raffwin/shared/schemas'
 import type { AdminMe } from '@raffwin/shared/admin-types'
@@ -46,6 +48,7 @@ import * as finance from './finance'
 import * as devices from './devices'
 import { deviceSignInBrowser, deviceSignInTelegram } from './devices'
 import * as risk from './risk'
+import * as dataReset from './data-reset'
 import { fetchRemoteImage, storeUpload } from '../services/media'
 import { forgetRaffles } from '../lib/shared-cache'
 import type { Period } from './finance'
@@ -305,6 +308,11 @@ export function adminRoutes(ctx: AppContext): Router {
     const list = body.userIds.map((id) => ({ userId: id, username: byId.get(id) ?? null }))
     await askOrRun(req, res, 'balance_adjustment_bulk', { users: list, raffs: body.raffs }, body.reason)
   })
+  // Delete a player for good (super admin): a backup first, then every row that is theirs; logs stay
+  r.post('/users/:id/delete', authed, perm('users.delete'), async (req, res) => {
+    const body = deletePlayerBody.parse(req.body)
+    res.json(await dataReset.deletePlayer(ctx, adminId(req), idParam(req), body, requestMeta(ctx, req).ipHash))
+  })
   // Make this player an admin (super admin): bound to their Telegram account at once
   r.post('/users/:id/make-admin', authed, perm('admins.manage'), async (req, res) => {
     res.status(201).json(await admins.createFromPlayer(ctx, adminId(req), idParam(req), admins.fromPlayerBody.parse(req.body)))
@@ -438,6 +446,15 @@ export function adminRoutes(ctx: AppContext): Router {
   r.post('/finance/expenses/:id/void', authed, perm('finance.write'), async (req, res) => {
     const { reason } = reasonBody.parse(req.body)
     res.json(await finance.voidExpense(ctx, adminId(req), idParam(req), reason))
+  })
+
+  /* Data reset (super_admin) ------------------------------------------------ */
+
+  r.get('/system/reset', authed, perm('system.reset'), async (_req, res) => {
+    res.json(await dataReset.resetPreview(ctx))
+  })
+  r.post('/system/reset', authed, perm('system.reset'), async (req, res) => {
+    res.json(await dataReset.resetData(ctx, adminId(req), resetBody.parse(req.body), requestMeta(ctx, req).ipHash))
   })
 
   /* Admins (super_admin) ---------------------------------------------------- */

@@ -119,6 +119,15 @@ const schema = z.object({
     .string()
     .regex(/^[a-z0-9-]{3,64}$/)
     .optional(),
+  /**
+   * Folder for the database dump taken right before every data reset or
+   * player delete (super admin). Unset = both are switched off: nothing is
+   * wiped without a copy to restore. On the server: /srv/<env>/backups, which
+   * the service unit must list in ReadWritePaths.
+   */
+  RESET_BACKUP_DIR: z.string().min(1).optional(),
+  /** pg_dump to run for that copy; its major version must not be older than the server's */
+  PG_DUMP_BIN: z.string().min(1).default('pg_dump'),
 })
 
 export type Config = z.infer<typeof schema>

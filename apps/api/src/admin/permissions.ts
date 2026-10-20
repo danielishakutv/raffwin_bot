@@ -38,6 +38,10 @@ export const PERMISSIONS = [
   /** Voucher batches: see them and look a code up; ask for a batch, hand out its codes, void */
   'vouchers.read',
   'vouchers.write',
+  /** Delete a player for good, all their data with them (super_admin only) */
+  'users.delete',
+  /** Reset players, raffles, finance and messages back to zero (super_admin only) */
+  'system.reset',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]

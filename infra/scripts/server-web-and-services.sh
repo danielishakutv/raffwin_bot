@@ -55,6 +55,8 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 ReadOnlyPaths=/srv/$env
+# The super admin data reset and player delete save a pg_dump here first (RESET_BACKUP_DIR)
+ReadWritePaths=/srv/$env/backups
 MemoryMax=700M
 
 [Install]

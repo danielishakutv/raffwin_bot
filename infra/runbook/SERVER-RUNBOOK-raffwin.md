@@ -76,6 +76,16 @@ Migrations only ever add; a rollback leaves the newer tables unused.
 
 Backups are local to the server. Copy them to a second location as well.
 
+## Data reset and player delete (super admin)
+
+Admin > Settings > Reset data clears players, raffles, finance and/or messages; Admin >
+Players > a player > Delete player for good removes one player. Both first save
+`/srv/<env>/backups/<NODE_ENV>-before-reset-<UTC time>Z.dump` (or `-before-player-delete-`)
+as the service user and refuse to wipe anything if that fails. They need, in
+`/srv/<env>/shared/.env`, `RESET_BACKUP_DIR=/srv/<env>/backups`, and in the unit
+`ReadWritePaths=/srv/<env>/backups`; without either they are switched off. Undo a reset by
+restoring that file as above. The audit log (`data.reset`, `user.delete`) names the file.
+
 ## If it is down
 
 1. `systemctl status <env>-api`. Crashed? Check `journalctl -u <env>-api -n 100`.

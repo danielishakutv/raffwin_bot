@@ -272,3 +272,28 @@ export type RateBaseBody = z.infer<typeof rateBaseBody>
 export type LimitsBody = z.infer<typeof limitsBody>
 export type AdjustmentBody = z.infer<typeof adjustmentBody>
 export type BulkAdjustmentBody = z.infer<typeof bulkAdjustmentBody>
+
+/* Data reset (super admin) ------------------------------------------------ */
+
+/**
+ * What a reset can clear; "everything" is all four. Admins, settings, feature
+ * switches, rate history, the audit log and security events are always kept.
+ */
+export const RESET_PARTS = ['players', 'raffles', 'finance', 'messages'] as const
+export type ResetPart = (typeof RESET_PARTS)[number]
+
+/** The words a super admin types to confirm a reset, per environment */
+export function resetPhrase(env: 'production' | 'staging' | 'development' | 'test'): string {
+  return env === 'production' ? 'RESET LIVE' : env === 'staging' ? 'RESET TEST' : 'RESET DEV'
+}
+
+export const resetBody = reasonBody.extend({
+  parts: z.array(z.enum(RESET_PARTS)).min(1, 'Choose what to reset').max(RESET_PARTS.length),
+  /** Must equal resetPhrase(env) exactly */
+  confirm: z.string().trim().max(40),
+})
+
+export const deletePlayerBody = reasonBody.extend({
+  /** The player's username (or Telegram id when they never chose one), typed again */
+  confirm: z.string().trim().max(64),
+})

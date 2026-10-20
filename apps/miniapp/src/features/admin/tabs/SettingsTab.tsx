@@ -3,6 +3,7 @@ import type { AdminSettings } from '@raffwin/shared/admin-types'
 import { adminCall } from '../adminSession'
 import { useAction, useLoad } from '../hooks'
 import { Button, Card, Err, Field, Loading, Notice, TabHeading, TextInput } from '../ui'
+import { DataReset } from './DataReset'
 import { RateAndSales } from './RateAndSales'
 import { MyDevices, TeamRisk } from './TeamSecurity'
 
@@ -86,6 +87,7 @@ export function SettingsTab({ can, superAdmin }: { can: string[]; superAdmin: bo
           <MyPassword />
           <MyDevices />
           <TeamRisk />
+          {can.includes('system.reset') && <DataReset />}
         </div>
       </div>
     </>

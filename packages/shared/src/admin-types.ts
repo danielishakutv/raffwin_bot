@@ -449,3 +449,34 @@ export interface AdminSettings {
   maxEntriesPerUserPerRaffle: number | null
   dailySpendRaffs: number | null
 }
+
+/** GET /admin/v1/system/reset: what a reset would clear, counted now */
+export interface AdminResetPreview {
+  /** False until the server has a backup folder (RESET_BACKUP_DIR); resets are refused without one */
+  available: boolean
+  /** What to type to confirm, e.g. RESET LIVE */
+  phrase: string
+  env: 'production' | 'staging' | 'development' | 'test'
+  counts: {
+    players: number
+    raffles: number
+    entries: number
+    ledgerLines: number
+    raffsInBalances: number
+    purchases: number
+    vouchers: number
+    expenses: number
+    transfers: number
+    broadcasts: number
+    notifications: number
+  }
+}
+
+/** What a reset or a player delete did */
+export interface AdminResetResult {
+  backupFile: string
+  /** Rows removed per table */
+  deleted: Record<string, number>
+  /** Rows changed to stay consistent (winners cleared, tickets renumbered, balances rebuilt...) */
+  updated: Record<string, number>
+}

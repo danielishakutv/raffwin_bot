@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowLeft, Check as CheckIcon, ChevronRight, Search } from 'lucide-react'
-import type { AdminApproval, AdminUserDetail, AdminUserSummary } from '@raffwin/shared/admin-types'
+import type { AdminApproval, AdminResetResult, AdminUserDetail, AdminUserSummary } from '@raffwin/shared/admin-types'
 import { adminCall } from '../adminSession'
 import { fmt, useAction, useLoad, when } from '../hooks'
 import { askText } from '../ask'
@@ -44,7 +44,18 @@ export function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boo
     })
   const allShownPicked = !!data?.length && data.every((u) => picked.has(u.id))
 
-  if (selected) return <PlayerDetail id={selected} can={can} superAdmin={superAdmin} onBack={() => setSelected(null)} />
+  if (selected)
+    return (
+      <PlayerDetail
+        id={selected}
+        can={can}
+        superAdmin={superAdmin}
+        onBack={(message) => {
+          setSelected(null)
+          if (message) setDone(message)
+        }}
+      />
+    )
   if (reviewing)
     return (
       <BulkAdjust
@@ -190,7 +201,7 @@ export function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boo
   )
 }
 
-function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string[]; superAdmin: boolean; onBack: () => void }) {
+function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string[]; superAdmin: boolean; onBack: (message?: string) => void }) {
   const { data: d, error, reload } = useLoad<AdminUserDetail>(`/users/${id}`, 10_000)
   const action = useAction()
   const [done, setDone] = useState<string | null>(null)
@@ -224,7 +235,7 @@ function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string
   return (
     <div className="admin-in grid gap-4">
       <div>
-        <Button variant="ghost" size="sm" icon={<ArrowLeft size={15} />} onClick={onBack}>
+        <Button variant="ghost" size="sm" icon={<ArrowLeft size={15} />} onClick={() => onBack()}>
           Players
         </Button>
       </div>
@@ -286,6 +297,8 @@ function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string
 
           {can.includes('admins.manage') && !d.admin && <MakeAdmin d={d} onMade={reload} />}
 
+          {can.includes('users.delete') && <DeletePlayer d={d} onDeleted={onBack} />}
+
           <div className="grid gap-4 xl:grid-cols-2">
             <PlayerEngagement d={d} />
             <PlayerDelivery d={d} />
@@ -336,5 +349,36 @@ function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string
         </>
       )}
     </div>
+  )
+}
+
+/** Super admin: remove this player for good. The server saves a backup first; the audit log keeps who it was. */
+function DeletePlayer({ d, onDeleted }: { d: AdminUserDetail; onDeleted: (message: string) => void }) {
+  const action = useAction()
+  const [mismatch, setMismatch] = useState<string | null>(null)
+  const expected = d.user.username ?? String(d.user.telegramId)
+  const remove = async () => {
+    setMismatch(null)
+    const typed = await askText(
+      `Delete ${d.user.username ? `@${d.user.username}` : 'this player'} for good? Their account, tickets, Raffs, purchases, transfers, KYC and messages are removed; the audit log keeps who they were. Their Telegram account can sign up again as a brand-new player. Type ${expected} to confirm.`,
+      { placeholder: expected, confirm: 'Next', danger: true },
+    )
+    if (typed === null) return
+    if (typed.trim().replace(/^@/, '').toLowerCase() !== expected.toLowerCase()) {
+      setMismatch(`That does not match ${expected}. Nothing was deleted.`)
+      return
+    }
+    const reason = await askText('Why? (recorded in the audit log)', { confirm: 'Delete for good', danger: true })
+    if (!reason) return
+    const r = await action.run(() => adminCall<AdminResetResult>('POST', `/users/${d.user.id}/delete`, { confirm: typed.trim(), reason }))
+    if (r) onDeleted(`Deleted ${d.user.username ? `@${d.user.username}` : `Telegram ${d.user.telegramId}`} for good. Backup saved as ${r.backupFile.split('/').pop()}.`)
+  }
+  return (
+    <Card title="Delete player for good" subtitle="Removes the account and everything that is theirs. A backup is saved on the server first.">
+      <Err message={mismatch ?? action.error} />
+      <Button variant="danger" busy={action.busy} onClick={() => void remove()}>
+        Delete this player
+      </Button>
+    </Card>
   )
 }
