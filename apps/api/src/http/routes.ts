@@ -117,7 +117,7 @@ export function v1Routes(ctx: AppContext): Router {
   // Polled every few seconds by the app: counts, balance and raffle states without a refresh
   router.get('/live', authed, async (req, res) => {
     res.set('cache-control', 'no-store')
-    res.json(await raffles.liveSnapshot(ctx.db, me(req), ctx.now()))
+    res.json(await raffles.liveSnapshot(ctx.db, me(req), ctx.now(), { cache: ctx.cache, basePollMs: ctx.config.LIVE_POLL_MS }))
   })
 
   // Raffle photos: public, because an <img> carries no token. Ids are random uuids.
@@ -137,7 +137,7 @@ export function v1Routes(ctx: AppContext): Router {
   })
 
   router.get('/raffles', authed, async (req, res) => {
-    res.json(await raffles.listForPlayer(ctx.db, me(req).id, ctx.now()))
+    res.json(await raffles.listForPlayer(ctx.db, me(req).id, ctx.now(), ctx.cache))
   })
 
   router.get('/raffles/:id', authed, async (req, res) => {

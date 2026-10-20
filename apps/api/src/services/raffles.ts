@@ -8,8 +8,9 @@ import type { Entry, LiveSnapshot, Raffle, WinnerSlot } from '@raffwin/shared'
 import type { Db } from '../db/client'
 import { entries, rafflePrizes, raffles, users, type EntryRow, type RaffleRow } from '../db/schema'
 import { HttpError } from '../lib/http-error'
+import { CACHE_KEYS, type SharedCache } from '../lib/shared-cache'
 import { publicName } from './draw'
-import { featuresFor } from './features'
+import { featuresForLive } from './features'
 
 const DRAWN_VISIBLE_DAYS = 30
 const ENTRANTS_SHOWN = 40
@@ -88,21 +89,36 @@ export async function toRaffles(db: Db, rows: RaffleRow[]): Promise<Raffle[]> {
   })
 }
 
-export async function listForPlayer(db: Db, userId: string, now: number): Promise<Raffle[]> {
+/** Open raffles and those drawn in the last 30 days: the same for every player */
+async function publicRaffles(db: Db, now: number): Promise<Raffle[]> {
   const cutoff = new Date(now - DRAWN_VISIBLE_DAYS * 86_400_000)
-  const mine = db.select({ id: entries.raffleId }).from(entries).where(eq(entries.userId, userId))
   const rows = await db
     .select()
     .from(raffles)
-    .where(
-      or(
-        inArray(raffles.status, ['open', 'drawing']),
-        and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff)),
-        and(eq(raffles.status, 'drawn'), inArray(raffles.id, mine)),
-      ),
-    )
+    .where(or(inArray(raffles.status, ['open', 'drawing']), and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff))))
     .orderBy(asc(raffles.deadline))
   return toRaffles(db, rows)
+}
+
+/**
+ * Everything a player sees: the public list (from the shared cache, so a
+ * crowd opening the app at once after a draw costs one build of it), plus any
+ * older drawn raffle this player holds an entry in, which is rare and cheap.
+ */
+export async function listForPlayer(db: Db, userId: string, now: number, cache?: SharedCache): Promise<Raffle[]> {
+  const cutoff = new Date(now - DRAWN_VISIBLE_DAYS * 86_400_000)
+  const mine = db.select({ id: entries.raffleId }).from(entries).where(eq(entries.userId, userId))
+  const [shared, olderRows] = await Promise.all([
+    cache ? cache.get(CACHE_KEYS.publicRaffles, () => publicRaffles(db, now)) : publicRaffles(db, now),
+    db
+      .select()
+      .from(raffles)
+      .where(and(eq(raffles.status, 'drawn'), inArray(raffles.id, mine), sql`${raffles.drawnAt} <= ${cutoff}`)),
+  ])
+  if (olderRows.length === 0) return shared
+  const seen = new Set(shared.map((r) => r.id))
+  const older = await toRaffles(db, olderRows.filter((r) => !seen.has(r.id)))
+  return [...shared, ...older].sort((a, b) => Date.parse(a.deadline) - Date.parse(b.deadline))
 }
 
 export async function getForPlayer(db: Db, raffleId: string): Promise<Raffle> {
@@ -115,18 +131,10 @@ export async function getForPlayer(db: Db, raffleId: string): Promise<Raffle> {
   return raffle as Raffle
 }
 
-/**
- * The polled snapshot: one indexed query over the visible raffles plus the
- * player's balance and feature switches (a feature turned off disappears from
- * the app within seconds). Kept deliberately small, because every open app
- * asks for it every few seconds.
- */
-export async function liveSnapshot(db: Db, user: { id: string; balanceCache: number }, now: number): Promise<LiveSnapshot> {
+type LiveRaffle = LiveSnapshot['raffles'][number]
+
+async function liveRaffles(db: Db, now: number): Promise<LiveRaffle[]> {
   const cutoff = new Date(now - DRAWN_VISIBLE_DAYS * 86_400_000)
-  const [[me], features] = await Promise.all([
-    db.select({ balance: users.balanceCache }).from(users).where(eq(users.id, user.id)),
-    featuresFor(db, user.id),
-  ])
   const rows = await db
     .select({
       id: raffles.id,
@@ -140,19 +148,55 @@ export async function liveSnapshot(db: Db, user: { id: string; balanceCache: num
     })
     .from(raffles)
     .where(or(inArray(raffles.status, ['open', 'drawing']), and(eq(raffles.status, 'drawn'), gt(raffles.drawnAt, cutoff))))
+  return rows.map((r) => ({
+    id: r.id,
+    entriesCount: r.entriesCount,
+    entriesTarget: r.entriesTarget,
+    status: r.status,
+    deadline: r.deadline.toISOString(),
+    drawnAt: r.drawnAt?.toISOString() ?? null,
+    version: r.version,
+  }))
+}
+
+/** Within this long of a deadline the app polls faster, so the draw reaches it quickly */
+const NEAR_DRAW_MS = 2 * 60_000
+const NEAR_DRAW_POLL_MS = 3000
+
+/**
+ * How long the app should wait before its next poll: the configured pace,
+ * faster while a raffle is about to draw (or drawing), times `loadFactor`
+ * when the server is busy (services/capacity.ts).
+ */
+export function nextPollMs(rows: LiveRaffle[], now: number, baseMs: number, loadFactor = 1): number {
+  const nearDraw = rows.some((r) => r.status === 'drawing' || (r.status === 'open' && Date.parse(r.deadline) - now < NEAR_DRAW_MS))
+  const pace = nearDraw ? Math.min(baseMs, NEAR_DRAW_POLL_MS) : baseMs
+  return Math.min(60_000, Math.round(pace * Math.max(1, loadFactor)))
+}
+
+/**
+ * The polled snapshot. The balance is the one on the user row the sign-in
+ * check has just read (no second query); the raffles and the global feature
+ * switches come from the shared cache. So for most players a poll costs the
+ * sign-in check and nothing else.
+ */
+export async function liveSnapshot(
+  db: Db,
+  user: { id: string; balanceCache: number },
+  now: number,
+  opts: { cache?: SharedCache; basePollMs?: number; loadFactor?: number } = {},
+): Promise<LiveSnapshot> {
+  const { cache } = opts
+  const [rows, features] = await Promise.all([
+    cache ? cache.get(CACHE_KEYS.liveRaffles, () => liveRaffles(db, now)) : liveRaffles(db, now),
+    featuresForLive(db, user.id, cache),
+  ])
   return {
     serverTime: now,
-    balance: me?.balance ?? user.balanceCache,
+    balance: user.balanceCache,
     features,
-    raffles: rows.map((r) => ({
-      id: r.id,
-      entriesCount: r.entriesCount,
-      entriesTarget: r.entriesTarget,
-      status: r.status,
-      deadline: r.deadline.toISOString(),
-      drawnAt: r.drawnAt?.toISOString() ?? null,
-      version: r.version,
-    })),
+    raffles: rows,
+    pollMs: nextPollMs(rows, now, opts.basePollMs ?? 6000, opts.loadFactor),
   }
 }
 

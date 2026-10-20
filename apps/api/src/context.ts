@@ -3,6 +3,7 @@ import type { Config } from './config'
 import type { Db } from './db/client'
 import type { NotificationButton } from './db/schema'
 import type { AccessTokens } from './lib/access-token'
+import type { SharedCache } from './lib/shared-cache'
 
 /** How a bot message is sent: Telegram HTML or plain text, with inline buttons. */
 export interface SendOptions {
@@ -31,6 +32,8 @@ export interface AppContext {
   now: () => number
   /** The API's own bot; tests capture messages instead. Absent = this process cannot message anyone. */
   sendTelegram?: SendTelegram
+  /** What every player sees alike, held for LIVE_CACHE_MS. Absent = always read the database (tests). */
+  cache?: SharedCache
 }
 
 /** What every request handler knows about the caller, for logs and security events. */

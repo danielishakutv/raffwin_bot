@@ -173,15 +173,18 @@ export const useAppStore = create<AppState>()(
           }
         } else {
           const byId = new Map(live.raffles.map((l) => [l.id, l]))
+          // Sales only ever add entries to a live raffle. The server answers polls from a cache a second or two old,
+          // so a count lower than one already shown (say, from my own entry's reply) is older news: keep the higher.
+          const countOf = (r: Raffle, l: LiveSnapshot['raffles'][number]) => Math.max(r.entriesCount, l.entriesCount)
           const changed = raffles.some((r) => {
             const l = byId.get(r.id)
-            return !!l && (l.entriesCount !== r.entriesCount || l.entriesTarget !== r.entriesTarget || l.deadline !== r.deadline)
+            return !!l && (countOf(r, l) !== r.entriesCount || l.entriesTarget !== r.entriesTarget || l.deadline !== r.deadline)
           })
           if (changed) {
             set({
               raffles: raffles.map((r) => {
                 const l = byId.get(r.id)
-                return l ? { ...r, entriesCount: l.entriesCount, entriesTarget: l.entriesTarget, deadline: l.deadline } : r
+                return l ? { ...r, entriesCount: countOf(r, l), entriesTarget: l.entriesTarget, deadline: l.deadline } : r
               }),
             })
           }

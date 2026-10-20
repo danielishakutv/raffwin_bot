@@ -14,6 +14,7 @@ import type { Db } from '../db/client'
 import { adminUsers, featureFlagOverrides, featureFlags, users } from '../db/schema'
 import { escapeHtml } from '../lib/html'
 import { HttpError } from '../lib/http-error'
+import { CACHE_KEYS } from '../lib/shared-cache'
 import { clearOverride, getGlobalFlags, setGlobal, setOverride, type FeatureOverrideRow } from '../services/features'
 import { createBroadcast, enqueue, openAppButton } from '../services/notify'
 import { appendAudit } from './audit'
@@ -105,6 +106,8 @@ export async function toggleFeature(ctx: AppContext, adminId: string, key: Featu
       after: { enabled: change.after, reason: body.reason, broadcastId: broadcast?.id ?? null },
     })
   })
+  // Players on this process see it at once; other processes within LIVE_CACHE_MS
+  ctx.cache?.invalidate(CACHE_KEYS.globalFlags)
   return getFeature(ctx, key)
 }
 
@@ -172,6 +175,7 @@ export async function addOverride(ctx: AppContext, adminId: string, key: Feature
     })
     return o
   })
+  ctx.cache?.invalidate(CACHE_KEYS.overrideUsers)
   const [by] = await ctx.db.select({ name: adminUsers.name }).from(adminUsers).where(eq(adminUsers.id, adminId))
   return toOverride(row, player, by?.name ?? null)
 }
@@ -190,6 +194,7 @@ export async function removeOverride(ctx: AppContext, adminId: string, overrideI
       after: { reason },
     })
   })
+  ctx.cache?.invalidate(CACHE_KEYS.overrideUsers)
 }
 
 /** Every feature as it applies to one player (admin > player detail). */

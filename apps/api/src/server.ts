@@ -12,6 +12,7 @@ import type { InlineKeyboardButton } from 'grammy/types'
 import type { AppContext, SendTelegram } from './context'
 import type { NotificationButton } from './db/schema'
 import { AccessTokens } from './lib/access-token'
+import { SharedCache } from './lib/shared-cache'
 import { startWorkers } from './services/worker'
 
 const config = loadConfig()
@@ -58,6 +59,7 @@ const ctx: AppContext = {
   tokens: new AccessTokens(config.JWT_SECRET, config.ACCESS_TOKEN_TTL_SECONDS),
   now: Date.now,
   sendTelegram,
+  cache: config.LIVE_CACHE_MS > 0 ? new SharedCache(config.LIVE_CACHE_MS) : undefined,
 }
 const app = createApp(ctx)
 

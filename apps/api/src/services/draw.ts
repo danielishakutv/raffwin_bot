@@ -29,6 +29,7 @@ import { sha256Hex } from '../lib/crypto'
 import { stopDrawReminders } from './draw-reminders'
 import { post, type Tx } from './ledger'
 import { createBroadcast, enqueue, openAppButton } from './notify'
+import { forgetRaffles } from '../lib/shared-cache'
 
 /** A fresh secret seed and the commitment published while entries are open. */
 export function newDrawSeed(): { seed: string; commitment: string } {
@@ -103,6 +104,7 @@ export async function runDrawsOnce(ctx: AppContext): Promise<DrawPass> {
   for (const { id } of due) {
     try {
       const outcome = await settleRaffle(ctx, id)
+      if (outcome !== 'skipped') forgetRaffles(ctx.cache)
       if (outcome === 'drawn') pass.drawn += 1
       if (outcome === 'cancelled') pass.cancelled += 1
     } catch (error) {

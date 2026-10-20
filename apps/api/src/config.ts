@@ -56,6 +56,15 @@ const schema = z.object({
   WORKERS: z.enum(['on', 'off']).default('on'),
 
   /**
+   * How long what every player sees alike (open raffles, winners, feature
+   * switches) is served from memory before the database is asked again.
+   * 0 turns the cache off. Each API process keeps its own copy.
+   */
+  LIVE_CACHE_MS: z.coerce.number().int().min(0).max(10_000).default(2000),
+  /** How often an open app polls /v1/live, told to the app in each answer (faster near a draw, slower when idle) */
+  LIVE_POLL_MS: z.coerce.number().int().min(2000).max(60_000).default(6000),
+
+  /**
    * The Mini App's own address, e.g. https://test.example.com/ - the
    * bot's buttons open it, and the webhook lives at <it>/api/telegram/webhook.
    */

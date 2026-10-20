@@ -166,6 +166,8 @@ export interface LiveSnapshot {
     /** Changes whenever an admin edits what players see (price, prizes, text); entries do not change it */
     version: string
   }[]
+  /** Wait this long before the next poll (the server slows apps down when busy, speeds them up near a draw) */
+  pollMs?: number
 }
 
 /** One page of a cursor-paginated list. nextCursor is null on the last page. */

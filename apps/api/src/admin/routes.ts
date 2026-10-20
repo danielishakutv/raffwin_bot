@@ -47,6 +47,7 @@ import * as devices from './devices'
 import { deviceSignInBrowser, deviceSignInTelegram } from './devices'
 import * as risk from './risk'
 import { fetchRemoteImage, storeUpload } from '../services/media'
+import { forgetRaffles } from '../lib/shared-cache'
 import type { Period } from './finance'
 
 const uuid = z.string().uuid()
@@ -181,6 +182,7 @@ export function adminRoutes(ctx: AppContext): Router {
   })
   r.put('/raffles/:id', authed, perm('raffles.write'), async (req, res) => {
     res.json(await ops.updateRaffle(ctx, adminId(req), idParam(req), raffleBody.parse(req.body), isSuper(req)))
+    forgetRaffles(ctx.cache)
   })
   // A raffle photo, sent as the raw image (the app shrinks it first). Returns the path to put in imageUrl.
   r.post(
@@ -206,11 +208,13 @@ export function adminRoutes(ctx: AppContext): Router {
   })
   r.post('/raffles/:id/open', authed, perm('raffles.write'), async (req, res) => {
     res.json(await ops.openRaffle(ctx, adminId(req), idParam(req)))
+    forgetRaffles(ctx.cache)
   })
   // Back to draft (hidden from players); only while nobody has entered
   r.post('/raffles/:id/unpublish', authed, perm('raffles.write'), async (req, res) => {
     const { reason } = reasonBody.parse(req.body)
     res.json(await ops.unpublishRaffle(ctx, adminId(req), idParam(req), reason))
+    forgetRaffles(ctx.cache)
   })
   r.post('/raffles/:id/cancel', authed, perm('raffles.cancel.request'), async (req, res) => {
     const { reason } = reasonBody.parse(req.body)
@@ -221,6 +225,7 @@ export function adminRoutes(ctx: AppContext): Router {
       throw new HttpError('INVALID_INPUT', `This raffle is already ${raffle.status}.`)
     }
     await askOrRun(req, res, 'raffle_cancel', { raffleId: id, prizeName: raffle.prizeName, entriesCount: raffle.entriesCount }, reason)
+    forgetRaffles(ctx.cache)
   })
 
   /* Users ------------------------------------------------------------------ */
@@ -368,6 +373,8 @@ export function adminRoutes(ctx: AppContext): Router {
   r.post('/approvals/:id/approve', authed, async (req, res) => {
     const { note } = decisionBody.parse(req.body ?? {})
     res.json(await decide(ctx, adminId(req), idParam(req), 'approve', note))
+    // An approved cancellation changes what players see
+    forgetRaffles(ctx.cache)
   })
   r.post('/approvals/:id/reject', authed, async (req, res) => {
     const { note } = decisionBody.parse(req.body ?? {})

@@ -109,7 +109,7 @@ export async function bootstrap(ctx: AppContext, user: UserRow): Promise<Bootstr
   const current = await reload(ctx, user.id)
   const [profile, raffleList, entryList, transactions, features] = await Promise.all([
     profileOf(ctx, current),
-    listForPlayer(ctx.db, current.id, ctx.now()),
+    listForPlayer(ctx.db, current.id, ctx.now(), ctx.cache),
     entriesForPlayer(ctx.db, current.id),
     recentTransactions(ctx.db, current.id),
     featuresFor(ctx.db, current.id),

@@ -9,6 +9,7 @@ import { FEATURES, defaultFeatures, isFeatureKey, type FeatureKey, type FeatureM
 import type { Db } from '../db/client'
 import { featureFlagOverrides, featureFlags, users } from '../db/schema'
 import { HttpError } from '../lib/http-error'
+import { CACHE_KEYS, type SharedCache } from '../lib/shared-cache'
 
 type Reader = Pick<Db, 'select'>
 type Writer = Pick<Db, 'select' | 'insert' | 'update'>
@@ -32,6 +33,33 @@ export async function featuresFor(db: Reader, userId: string): Promise<FeatureMa
       .from(featureFlagOverrides)
       .where(and(eq(featureFlagOverrides.userId, userId), isNull(featureFlagOverrides.clearedAt))),
   ])
+  for (const o of overrides) if (isFeatureKey(o.key)) map[o.key] = o.enabled
+  return map
+}
+
+/**
+ * featuresFor for the polled snapshot: the global switches and the list of
+ * players holding any override come from the shared cache, so most players
+ * cost no query at all. A switch change reaches apps within the cache time.
+ */
+export async function featuresForLive(db: Pick<Db, 'select' | 'selectDistinct'>, userId: string, cache: SharedCache | undefined): Promise<FeatureMap> {
+  if (!cache) return featuresFor(db, userId)
+  const [global, withOverrides] = await Promise.all([
+    cache.get(CACHE_KEYS.globalFlags, () => getGlobalFlags(db)),
+    cache.get(CACHE_KEYS.overrideUsers, async () => {
+      const rows = await db
+        .selectDistinct({ userId: featureFlagOverrides.userId })
+        .from(featureFlagOverrides)
+        .where(isNull(featureFlagOverrides.clearedAt))
+      return new Set(rows.map((r) => r.userId))
+    }),
+  ])
+  const map = { ...global }
+  if (!withOverrides.has(userId)) return map
+  const overrides = await db
+    .select({ key: featureFlagOverrides.flagKey, enabled: featureFlagOverrides.enabled })
+    .from(featureFlagOverrides)
+    .where(and(eq(featureFlagOverrides.userId, userId), isNull(featureFlagOverrides.clearedAt)))
   for (const o of overrides) if (isFeatureKey(o.key)) map[o.key] = o.enabled
   return map
 }
