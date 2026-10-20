@@ -102,6 +102,10 @@ export interface AdminRaffle {
   openedAt: string | null
   drawnAt: string | null
   cancelledAt: string | null
+  /** Deleted from the admin list and the public raffles; every record behind it is kept */
+  deletedAt: string | null
+  /** The admin who deleted it, or 'the system' */
+  deletedBy: string | null
   createdAt: string
 }
 
@@ -279,7 +283,7 @@ export interface AdminEngagement {
 
 export interface AdminApproval {
   id: string
-  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel' | 'admin_risk_flag' | 'admin_risk_clear' | 'sales_options_change' | 'voucher_batch_create' | 'balance_adjustment_bulk'
+  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel' | 'admin_risk_flag' | 'admin_risk_clear' | 'sales_options_change' | 'voucher_batch_create' | 'balance_adjustment_bulk' | 'raffle_delete'
   /** One line a human can approve or reject from */
   summary: string
   payload: Record<string, unknown>

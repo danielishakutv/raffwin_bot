@@ -3,10 +3,12 @@
  * Drafts are invisible to players until published; publishing, unpublishing
  * and cancelling all happen from the list. "Run again" copies any raffle,
  * whatever its status, into a new draft and opens it in the editor; the
- * original is never changed.
+ * original is never changed. Delete takes a raffle off this list and the app
+ * (refunding an open one first) and keeps everything behind it: it moves to
+ * the Deleted filter, where it can be restored.
  */
 import { useMemo, useState } from 'react'
-import { CalendarClock, Copy, Pencil, Plus, Repeat, Search, Send, Undo2, XCircle } from 'lucide-react'
+import { ArchiveRestore, CalendarClock, Copy, Pencil, Plus, Repeat, Search, Send, Trash2, Undo2, XCircle } from 'lucide-react'
 import type { AdminApproval, AdminRaffle } from '@raffwin/shared/admin-types'
 import { prizeLabel } from '@raffwin/shared'
 import { PrizeVisual } from '@/components/ui/PrizeVisual'
@@ -18,7 +20,7 @@ import type { PrizeKind } from './draft'
 import { RaffleEditor } from './RaffleEditor'
 import { StatusBadge } from './StatusBadge'
 
-type Filter = 'all' | AdminRaffle['status']
+type Filter = 'all' | AdminRaffle['status'] | 'deleted'
 
 const FILTERS: { value: Filter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -27,10 +29,37 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: 'drawing', label: 'Drawing' },
   { value: 'drawn', label: 'Drawn' },
   { value: 'cancelled', label: 'Cancelled' },
+  { value: 'deleted', label: 'Deleted' },
 ]
+
+/** What deleting this raffle does, in the words of the confirmation */
+function deleteQuestion(r: AdminRaffle, superAdmin: boolean): { label: string; confirm: string } {
+  const n = r.entriesCount
+  if (r.status === 'draft') return { label: `Delete the draft "${r.prizeName}"? Players never saw it. Why?`, confirm: 'Delete draft' }
+  const after = superAdmin ? '' : ' A second admin has to approve it.'
+  const confirm = superAdmin ? 'Delete' : 'Ask to delete'
+  if (r.status === 'open' && n > 0) {
+    return {
+      label: `Delete "${r.prizeName}"? It is cancelled first: ${n === 1 ? 'the 1 entry is' : `all ${fmt(n)} entries are`} refunded in full and the bot tells every entrant. Their history keeps it.${after} Why?`,
+      confirm: superAdmin ? 'Refund and delete' : 'Ask to refund and delete',
+    }
+  }
+  if (r.status === 'open') return { label: `Delete "${r.prizeName}"? Nobody has entered; it leaves the app at once.${after} Why?`, confirm }
+  if (r.status === 'drawn') {
+    return { label: `Delete "${r.prizeName}"? It leaves this list and the app's raffles; the winners and everyone who entered keep it in their history.${after} Why?`, confirm }
+  }
+  return { label: `Delete "${r.prizeName}"? Its entries were already refunded; players keep the refund in their history.${after} Why?`, confirm }
+}
+
+/** Past its deadline an open raffle belongs to the draw; delete it once drawn or refunded */
+function deletable(r: AdminRaffle): boolean {
+  if (r.status === 'drawing') return false
+  return r.status !== 'open' || Date.parse(r.deadline) > Date.now()
+}
 
 export function RafflesTab({ can, superAdmin, onScrollTop }: { can: string[]; superAdmin: boolean; onScrollTop: () => void }) {
   const { data, error, reload } = useLoad<AdminRaffle[]>('/raffles', 5_000)
+  const deleted = useLoad<AdminRaffle[]>('/raffles?status=deleted')
   const [editing, setEditing] = useState<AdminRaffle | 'new' | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [q, setQ] = useState('')
@@ -39,18 +68,23 @@ export function RafflesTab({ can, superAdmin, onScrollTop }: { can: string[]; su
   const write = can.includes('raffles.write')
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { all: data?.length ?? 0 }
+    const c: Record<string, number> = { all: data?.length ?? 0, deleted: deleted.data?.length ?? 0 }
     for (const r of data ?? []) c[r.status] = (c[r.status] ?? 0) + 1
     return c
-  }, [data])
+  }, [data, deleted.data])
+  const list = filter === 'deleted' ? deleted.data : data
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return (data ?? []).filter(
+    return (list ?? []).filter(
       (r) =>
-        (filter === 'all' || r.status === filter) &&
+        (filter === 'all' || filter === 'deleted' || r.status === filter) &&
         (!needle || `${r.prizeName} ${r.model} ${r.category} ${r.prizes.map((p) => p.prizeItem).join(' ')}`.toLowerCase().includes(needle)),
     )
-  }, [data, filter, q])
+  }, [list, filter, q])
+  const reloadBoth = () => {
+    reload()
+    deleted.reload()
+  }
 
   const open = (r: AdminRaffle | 'new') => {
     setEditing(r)
@@ -113,6 +147,26 @@ export function RafflesTab({ can, superAdmin, onScrollTop }: { can: string[]; su
     if (a) setMsg(a.status === 'approved' ? `Cancelled and refunded: ${a.summary}` : `Queued for approval: ${a.summary}`)
     reload()
   }
+  const remove = async (r: AdminRaffle) => {
+    const { label, confirm } = deleteQuestion(r, superAdmin)
+    const reason = await askText(label, { confirm, danger: true })
+    if (!reason) return
+    // A draft goes at once (the raffle comes back); anything else is an approval, done or queued
+    const done = await action.run(() => adminCall<AdminRaffle | AdminApproval>('POST', `/raffles/${r.id}/delete`, { reason }))
+    if (done) {
+      if (!('summary' in done)) setMsg(`Deleted: ${done.prizeName}. It is under Deleted if you need it back.`)
+      else setMsg(done.status === 'approved' ? `Done: ${done.summary}. It is under Deleted if you need it back.` : `Queued for approval: ${done.summary}`)
+    }
+    reloadBoth()
+  }
+  const restore = async (r: AdminRaffle) => {
+    const effect = r.status === 'drawn' ? ', and its winners show in the app again' : r.status === 'cancelled' ? '; nobody is charged again' : ''
+    const reason = await askText(`Restore "${r.prizeName}"? It comes back to the list as ${r.status}${effect}. Why?`, { confirm: 'Restore' })
+    if (!reason) return
+    const done = await action.run(() => adminCall<AdminRaffle>('POST', `/raffles/${r.id}/restore`, { reason }))
+    if (done) setMsg(`Restored: ${done.prizeName}.`)
+    reloadBoth()
+  }
 
   return (
     <div className="grid gap-4">
@@ -133,7 +187,7 @@ export function RafflesTab({ can, superAdmin, onScrollTop }: { can: string[]; su
           {msg}
         </Notice>
       )}
-      <Err message={error ?? action.error} />
+      <Err message={error ?? deleted.error ?? action.error} />
 
       <div className="flex flex-wrap items-center gap-2">
         <Segmented<Filter>
@@ -148,9 +202,11 @@ export function RafflesTab({ can, superAdmin, onScrollTop }: { can: string[]; su
         </label>
       </div>
 
-      {!data ? (
+      {!list ? (
         <Loading rows={4} />
-      ) : data.length === 0 ? (
+      ) : filter === 'deleted' && list.length === 0 ? (
+        <Empty title="Nothing deleted">Deleted raffles land here, with everything behind them kept, and can be restored.</Empty>
+      ) : list.length === 0 ? (
         <Empty title="No raffles yet">{write ? 'Start with New raffle. It stays a draft, hidden from players, until you publish it.' : 'Raffles appear here once someone creates one.'}</Empty>
       ) : shown.length === 0 ? (
         <Empty title="Nothing matches">Try another filter or search.</Empty>
@@ -160,11 +216,13 @@ export function RafflesTab({ can, superAdmin, onScrollTop }: { can: string[]; su
             <li key={r.id} className="admin-in min-w-0" style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}>
               <RaffleItem
                 r={r}
-                canEdit={write && (r.status === 'draft' || (r.status === 'open' && superAdmin))}
-                canPublish={write && r.status === 'draft'}
-                canUnpublish={write && r.status === 'open' && r.entriesCount === 0}
-                canCancel={(r.status === 'open' || r.status === 'draft') && can.includes('raffles.cancel.request')}
+                canEdit={!r.deletedAt && write && (r.status === 'draft' || (r.status === 'open' && superAdmin))}
+                canPublish={!r.deletedAt && write && r.status === 'draft'}
+                canUnpublish={!r.deletedAt && write && r.status === 'open' && r.entriesCount === 0}
+                canCancel={!r.deletedAt && (r.status === 'open' || r.status === 'draft') && can.includes('raffles.cancel.request')}
                 canRunAgain={write}
+                canDelete={!r.deletedAt && write && deletable(r) && (r.status === 'draft' || can.includes('raffles.cancel.request'))}
+                canRestore={!!r.deletedAt && write}
                 superAdmin={superAdmin}
                 busy={action.busy}
                 onEdit={() => open(r)}
@@ -172,6 +230,8 @@ export function RafflesTab({ can, superAdmin, onScrollTop }: { can: string[]; su
                 onPublish={() => void publish(r)}
                 onUnpublish={() => void unpublish(r)}
                 onCancel={() => void cancel(r)}
+                onDelete={() => void remove(r)}
+                onRestore={() => void restore(r)}
               />
             </li>
           ))}
@@ -188,6 +248,8 @@ function RaffleItem({
   canUnpublish,
   canCancel,
   canRunAgain,
+  canDelete,
+  canRestore,
   superAdmin,
   busy,
   onEdit,
@@ -195,6 +257,8 @@ function RaffleItem({
   onUnpublish,
   onCancel,
   onRunAgain,
+  onDelete,
+  onRestore,
 }: {
   r: AdminRaffle
   canEdit: boolean
@@ -202,6 +266,8 @@ function RaffleItem({
   canUnpublish: boolean
   canCancel: boolean
   canRunAgain: boolean
+  canDelete: boolean
+  canRestore: boolean
   superAdmin: boolean
   busy: boolean
   onEdit: () => void
@@ -209,6 +275,8 @@ function RaffleItem({
   onUnpublish: () => void
   onCancel: () => void
   onRunAgain: () => void
+  onDelete: () => void
+  onRestore: () => void
 }) {
   const total = r.prizes.length
   const live = r.status === 'open' || r.status === 'draft'
@@ -228,6 +296,14 @@ function RaffleItem({
           </div>
           <h3 className="mt-1 break-words text-[15px] font-bold leading-snug">{r.prizeName}</h3>
           {r.model && <p className="truncate text-[12px] text-neutral-600">{r.model}</p>}
+          {r.deletedAt && (
+            <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11.5px] text-neutral-500">
+              <Trash2 size={11} className="shrink-0" />{' '}
+              <span className="truncate" title={when(r.deletedAt)}>
+                Deleted {relative(r.deletedAt)} by {r.deletedBy}
+              </span>
+            </p>
+          )}
           {r.copiedFrom && (
             <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11.5px] text-neutral-500">
               <Copy size={11} className="shrink-0" /> <span className="truncate">Run again from {r.copiedFrom.prizeName}</span>
@@ -271,7 +347,7 @@ function RaffleItem({
         </div>
       </div>
 
-      {(canEdit || canPublish || canUnpublish || canCancel || canRunAgain) && (
+      {(canEdit || canPublish || canUnpublish || canCancel || canRunAgain || canDelete || canRestore) && (
         <div className="mt-auto flex flex-wrap gap-2 border-t border-black/10 p-3">
           {canPublish && (
             <Button size="sm" variant="solid" icon={<Send size={14} />} disabled={busy} onClick={onPublish}>
@@ -293,9 +369,19 @@ function RaffleItem({
               Run again
             </Button>
           )}
+          {canRestore && (
+            <Button size="sm" icon={<ArchiveRestore size={14} />} disabled={busy} onClick={onRestore}>
+              Restore
+            </Button>
+          )}
           {canCancel && (
             <Button size="sm" variant="ghost" className="ml-auto" icon={<XCircle size={14} />} disabled={busy} onClick={onCancel}>
               {superAdmin ? 'Cancel and refund' : 'Ask to cancel'}
+            </Button>
+          )}
+          {canDelete && (
+            <Button size="sm" variant="ghost" className={canCancel ? undefined : 'ml-auto'} icon={<Trash2 size={14} />} disabled={busy} onClick={onDelete}>
+              {r.status === 'draft' || superAdmin ? 'Delete' : 'Ask to delete'}
             </Button>
           )}
         </div>

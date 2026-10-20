@@ -30,6 +30,8 @@ export interface Payloads {
   /** The same signed amount for every player listed; applied to all of them or none */
   balance_adjustment_bulk: { users: { userId: string; username: string | null }[]; raffs: number }
   raffle_cancel: { raffleId: string; prizeName: string; entriesCount: number }
+  /** As it stood when asked; execute reads it again and refunds only if it is still open */
+  raffle_delete: { raffleId: string; prizeName: string; status: string; entriesCount: number }
   admin_risk_flag: { adminId: string; name: string }
   admin_risk_clear: { adminId: string; name: string }
 }
@@ -68,6 +70,13 @@ export function summarise(action: Action, payload: Record<string, unknown>): str
     case 'raffle_cancel': {
       const p = payload as unknown as Payloads['raffle_cancel']
       return `Cancel "${p.prizeName}" and refund ${p.entriesCount} entr${p.entriesCount === 1 ? 'y' : 'ies'}`
+    }
+    case 'raffle_delete': {
+      const p = payload as unknown as Payloads['raffle_delete']
+      const refund = p.status === 'open' && p.entriesCount > 0
+      return refund
+        ? `Delete "${p.prizeName}" and refund ${p.entriesCount} entr${p.entriesCount === 1 ? 'y' : 'ies'}`
+        : `Delete "${p.prizeName}" (${p.status}); its history is kept`
     }
     case 'admin_risk_flag': {
       const p = payload as unknown as Payloads['admin_risk_flag']
@@ -317,6 +326,10 @@ async function execute(
       const p = payload as Payloads['raffle_cancel']
       return cancelRaffle(tx, p.raffleId, adminId, at)
     }
+    case 'raffle_delete': {
+      const p = payload as Payloads['raffle_delete']
+      return deleteRaffle(tx, p.raffleId, adminId, at)
+    }
     case 'admin_risk_flag':
     case 'admin_risk_clear': {
       const p = payload as Payloads['admin_risk_flag']
@@ -437,4 +450,24 @@ export async function cancelRaffle(
   const entrants = [...new Set(list.map((e) => e.userId))]
   const broadcastId = await announceRaffleCancelled(tx, raffle, entrants, adminId, at, notReached)
   return { entriesRefunded: list.length, raffsRefunded: refunded, referralRaffsReversed: reversed, playersNotified: broadcastId ? entrants.length : 0 }
+}
+
+/**
+ * Deletes a raffle from the admin list and the public raffles, keeping every
+ * row behind it (raffles_no_delete refuses a real DELETE). A raffle still open
+ * for entries is first cancelled with cancelRaffle, so every entry is refunded
+ * in full and the entrants told by the bot; drafts, drawn and cancelled raffles
+ * are only marked. Past its deadline an open raffle belongs to the draw, so it
+ * is refused until the draw has settled it.
+ */
+export async function deleteRaffle(tx: Tx, raffleId: string, adminId: string | null, at: Date): Promise<Record<string, unknown>> {
+  const [raffle] = await tx.select().from(raffles).where(eq(raffles.id, raffleId)).for('update')
+  if (!raffle) throw new HttpError('NOT_FOUND', 'No such raffle.')
+  if (raffle.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle is already deleted.')
+  if (raffle.status === 'drawing' || (raffle.status === 'open' && raffle.deadline.getTime() <= at.getTime())) {
+    throw new HttpError('INVALID_INPUT', 'Entries have closed and the draw is running. Delete it once it has been drawn or refunded.')
+  }
+  const refund = raffle.status === 'open' ? await cancelRaffle(tx, raffleId, adminId, at) : null
+  await tx.update(raffles).set({ deletedAt: at, deletedByAdminId: adminId, updatedAt: sql`now()` }).where(eq(raffles.id, raffleId))
+  return { statusBefore: raffle.status, ...(refund ?? { entriesRefunded: 0, raffsRefunded: 0 }) }
 }

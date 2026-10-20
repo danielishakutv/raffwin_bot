@@ -33,10 +33,10 @@ import { HttpError } from '../lib/http-error'
 import { requestMeta } from '../http/middleware'
 import { rateSettings, salesSettings } from '../services/settings'
 import * as vouchers from '../services/vouchers'
-import { decide, executeDirect, listApprovals, requestApproval } from './approvals'
-import { verifyChain } from './audit'
+import { decide, deleteRaffle, executeDirect, listApprovals, requestApproval } from './approvals'
+import { appendAudit, verifyChain } from './audit'
 import * as ops from './operations'
-import { permissionsOf } from './permissions'
+import { can, permissionsOf } from './permissions'
 import { adminOf, auditEveryRequest, exchangeTicket, idleMinutesFor, logout, requireAdmin, requirePermission, resumeSession, type AdminChannel } from './session'
 import { startWebLogin, verifyWebLogin } from './web-login'
 import * as features from './features-admin'
@@ -171,7 +171,7 @@ export function adminRoutes(ctx: AppContext): Router {
   /* Raffles ---------------------------------------------------------------- */
 
   r.get('/raffles', authed, perm('raffles.read'), async (req, res) => {
-    const status = z.enum(['draft', 'open', 'drawing', 'drawn', 'cancelled']).optional().parse(req.query.status || undefined)
+    const status = z.enum(['draft', 'open', 'drawing', 'drawn', 'cancelled', 'deleted']).optional().parse(req.query.status || undefined)
     res.json(await ops.listRaffles(ctx, status))
   })
   r.get('/raffles/:id', authed, perm('raffles.read'), async (req, res) => {
@@ -224,7 +224,37 @@ export function adminRoutes(ctx: AppContext): Router {
     if (raffle.status === 'drawn' || raffle.status === 'cancelled') {
       throw new HttpError('INVALID_INPUT', `This raffle is already ${raffle.status}.`)
     }
+    if (raffle.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle is deleted. Restore it first.')
     await askOrRun(req, res, 'raffle_cancel', { raffleId: id, prizeName: raffle.prizeName, entriesCount: raffle.entriesCount }, reason)
+    forgetRaffles(ctx.cache)
+  })
+  /**
+   * Delete: off the admin list and the public raffles, every record kept. A
+   * draft (nothing sold, never seen) goes at once for anyone who can write
+   * raffles; anything players have seen is a second admin's decision unless a
+   * super admin does it, and an open raffle is refunded in full first.
+   */
+  r.post('/raffles/:id/delete', authed, perm('raffles.write'), async (req, res) => {
+    const { reason } = reasonBody.parse(req.body)
+    const id = idParam(req)
+    const [raffle] = await ctx.db.select().from(raffles).where(eq(raffles.id, id))
+    if (!raffle) throw new HttpError('NOT_FOUND', 'No such raffle.')
+    if (raffle.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle is already deleted.')
+    if (raffle.status === 'draft') {
+      await ctx.db.transaction(async (tx) => {
+        const result = await deleteRaffle(tx, id, adminId(req), new Date(ctx.now()))
+        await appendAudit(tx, { adminId: adminId(req), action: 'raffle.delete', targetType: 'raffle', targetId: id, after: { reason, ...result } })
+      })
+      res.json(await ops.getRaffle(ctx, id))
+      return
+    }
+    if (!can(adminOf(req).user.role, 'raffles.cancel.request')) throw new HttpError('FORBIDDEN', 'Your role cannot delete a raffle players have seen.')
+    await askOrRun(req, res, 'raffle_delete', { raffleId: id, prizeName: raffle.prizeName, status: raffle.status, entriesCount: raffle.entriesCount }, reason)
+    forgetRaffles(ctx.cache)
+  })
+  r.post('/raffles/:id/restore', authed, perm('raffles.write'), async (req, res) => {
+    const { reason } = reasonBody.parse(req.body)
+    res.json(await ops.restoreRaffle(ctx, adminId(req), idParam(req), reason))
     forgetRaffles(ctx.cache)
   })
 

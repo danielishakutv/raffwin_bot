@@ -66,6 +66,12 @@ export interface Entry {
   ticketFrom: number
   ticketTo: number
   createdAt: string
+  /**
+   * The raffle this entry was for, so the entry stays in the player's history
+   * after the raffle leaves the list (refunded, or deleted by an admin).
+   * refunded = the raffle was cancelled and this entry paid back in full.
+   */
+  raffle?: { prizeName: string; kind: PrizeKind; hue: number; imageUrl: string | null; refunded: boolean }
 }
 
 export type TransactionType =

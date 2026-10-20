@@ -62,6 +62,11 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
       ? (await ctx.db.select({ id: raffles.id, prizeName: raffles.prizeName }).from(raffles).where(inArray(raffles.id, sourceIds))).map((s) => [s.id, s.prizeName])
       : [],
   )
+  // Who deleted the deleted ones
+  const deleterIds = [...new Set(rows.map((r) => r.deletedByAdminId).filter((x): x is string => !!x))]
+  const deleters = new Map(
+    deleterIds.length ? (await ctx.db.select({ id: adminUsers.id, name: adminUsers.name }).from(adminUsers).where(inArray(adminUsers.id, deleterIds))).map((a) => [a.id, a.name]) : [],
+  )
   return rows.map((r) => ({
     id: r.id,
     slug: r.slug,
@@ -98,18 +103,52 @@ async function toAdminRaffles(ctx: AppContext, rows: RaffleRow[]): Promise<Admin
     openedAt: r.openedAt?.toISOString() ?? null,
     drawnAt: r.drawnAt?.toISOString() ?? null,
     cancelledAt: r.cancelledAt?.toISOString() ?? null,
+    deletedAt: r.deletedAt?.toISOString() ?? null,
+    deletedBy: r.deletedAt ? (r.deletedByAdminId ? (deleters.get(r.deletedByAdminId) ?? 'an admin') : 'the system') : null,
     createdAt: r.createdAt.toISOString(),
   }))
 }
 
-export async function listRaffles(ctx: AppContext, status?: string): Promise<AdminRaffle[]> {
-  const rows = await ctx.db
-    .select()
-    .from(raffles)
-    .where(status ? eq(raffles.status, status as RaffleRow['status']) : undefined)
-    .orderBy(desc(raffles.createdAt))
-    .limit(500)
+/** Every raffle not deleted (optionally one status), or with 'deleted' only the deleted ones, most recently deleted first */
+export async function listRaffles(ctx: AppContext, status?: RaffleRow['status'] | 'deleted'): Promise<AdminRaffle[]> {
+  const rows =
+    status === 'deleted'
+      ? await ctx.db.select().from(raffles).where(isNotNull(raffles.deletedAt)).orderBy(desc(raffles.deletedAt)).limit(500)
+      : await ctx.db
+          .select()
+          .from(raffles)
+          .where(and(isNull(raffles.deletedAt), status ? eq(raffles.status, status) : undefined))
+          .orderBy(desc(raffles.createdAt))
+          .limit(500)
   return toAdminRaffles(ctx, rows)
+}
+
+/** A deleted raffle cannot be edited, published or cancelled until it is restored */
+function refuseDeleted(row: RaffleRow): void {
+  if (row.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle is deleted. Restore it first.')
+}
+
+/**
+ * Brings a deleted raffle back to the admin list, as it was: a refunded one
+ * stays cancelled (nobody is charged again), a drawn one shows its winners to
+ * players again, a draft is a draft.
+ */
+export async function restoreRaffle(ctx: AppContext, adminId: string, id: string, reason: string): Promise<AdminRaffle> {
+  await ctx.db.transaction(async (tx) => {
+    const [row] = await tx.select().from(raffles).where(eq(raffles.id, id)).for('update')
+    if (!row) throw new HttpError('NOT_FOUND', 'No such raffle.')
+    if (!row.deletedAt) throw new HttpError('INVALID_INPUT', 'This raffle is not deleted.')
+    await tx.update(raffles).set({ deletedAt: null, deletedByAdminId: null, updatedAt: sql`now()` }).where(eq(raffles.id, id))
+    await appendAudit(tx, {
+      adminId,
+      action: 'raffle.restore',
+      targetType: 'raffle',
+      targetId: id,
+      before: { deletedAt: row.deletedAt.toISOString(), deletedByAdminId: row.deletedByAdminId },
+      after: { status: row.status, reason },
+    })
+  })
+  return getRaffle(ctx, id)
 }
 
 export async function getRaffle(ctx: AppContext, id: string): Promise<AdminRaffle> {
@@ -203,6 +242,7 @@ export async function updateRaffle(
   await ctx.db.transaction(async (tx) => {
     const [row] = await tx.select().from(raffles).where(eq(raffles.id, id)).for('update')
     if (!row) throw new HttpError('NOT_FOUND', 'No such raffle.')
+    refuseDeleted(row)
     if (row.status === 'open') {
       if (!superAdmin) throw new HttpError('FORBIDDEN', 'Only a super admin can change a raffle that is open for entries.')
       // Past its deadline the draw owns it (services/draw.ts runs within seconds)
@@ -253,6 +293,7 @@ export async function unpublishRaffle(ctx: AppContext, adminId: string, id: stri
   await ctx.db.transaction(async (tx) => {
     const [row] = await tx.select().from(raffles).where(eq(raffles.id, id)).for('update')
     if (!row) throw new HttpError('NOT_FOUND', 'No such raffle.')
+    refuseDeleted(row)
     if (row.status !== 'open') throw new HttpError('INVALID_INPUT', `Only an open raffle can be unpublished; this one is ${row.status}.`)
     if (row.entriesCount > 0) {
       throw new HttpError(
@@ -273,6 +314,7 @@ export async function openRaffle(ctx: AppContext, adminId: string | null, id: st
   await ctx.db.transaction(async (tx) => {
     const [row] = await tx.select().from(raffles).where(eq(raffles.id, id)).for('update')
     if (!row) throw new HttpError('NOT_FOUND', 'No such raffle.')
+    refuseDeleted(row)
     if (row.status !== 'draft') throw new HttpError('INVALID_INPUT', `This raffle is already ${row.status}.`)
     if (row.deadline.getTime() < ctx.now() + 3_600_000) {
       throw new HttpError('INVALID_INPUT', 'The deadline must be at least an hour away to open a raffle.')

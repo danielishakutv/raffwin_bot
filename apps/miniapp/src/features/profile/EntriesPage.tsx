@@ -15,6 +15,7 @@ import { getRaffleStatus, STATUS_LABEL } from '@/data/raffleStatus'
 import { formatDateTime, formatInt } from '@/services/format'
 import { haptics } from '@/services/haptics'
 import { sound } from '@/services/sound'
+import type { Entry } from '@/data/types'
 import { useAppStore } from '@/store/useAppStore'
 
 export function EntriesPage() {
@@ -40,7 +41,8 @@ export function EntriesPage() {
         <motion.ul variants={staggerContainer} initial="hidden" animate="show" className="flex flex-col gap-2">
           {entries.map((e) => {
             const raffle = raffles.find((r) => r.id === e.raffleId)
-            if (!raffle) return null
+            // Gone from the list (refunded, or deleted by Raffle Win): still my history, from the summary the server keeps
+            if (!raffle) return e.raffle ? <PastEntry key={e.id} entry={e} past={e.raffle} /> : null
             const status = getRaffleStatus(raffle, now)
             return (
               <motion.li key={e.id} variants={popIn}>
@@ -85,5 +87,35 @@ export function EntriesPage() {
         </motion.ul>
       )}
     </div>
+  )
+}
+
+/** An entry whose raffle is no longer listed: not tappable, since there is no raffle page to open */
+function PastEntry({ entry: e, past }: { entry: Entry; past: NonNullable<Entry['raffle']> }) {
+  return (
+    <motion.li variants={popIn}>
+      <div className="surface flex w-full items-center gap-3 rounded-2xl p-3 text-left opacity-80">
+        <div className="h-14 w-14 shrink-0 rounded-xl bg-white/5">
+          <PrizeVisual kind={past.kind} hue={past.hue} imageUrl={past.imageUrl} rounded="rounded-xl" className="h-full w-full" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="truncate text-[14px] font-bold">{past.prizeName}</p>
+            <Chip tone="neutral" className="h-6 text-[11px]">
+              {past.refunded ? 'Refunded' : 'Ended'}
+            </Chip>
+          </div>
+          <p className="text-[12px] text-mist">
+            {e.qty} {e.qty === 1 ? 'ticket' : 'tickets'} · {formatDateTime(e.createdAt)}
+          </p>
+          <p className="mt-0.5 flex items-center gap-2 text-[12px]">
+            <span className="flex items-center gap-1 font-bold">
+              <RaffsCoin size={12} /> <span className="nums">{formatInt(e.raffsSpent)}</span>
+            </span>
+            {past.refunded && <span className="text-mist">back in your balance</span>}
+          </p>
+        </div>
+      </div>
+    </motion.li>
   )
 }

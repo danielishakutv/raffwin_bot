@@ -292,6 +292,13 @@ export const raffles = pgTable(
     openedAt: timestamp('opened_at', { withTimezone: true }),
     drawnAt: timestamp('drawn_at', { withTimezone: true }),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    /**
+     * Deleted by an admin (20 Oct): gone from the admin list and the public
+     * raffles, never from the database. Entries, refunds, winners and the
+     * audit trail all stay, and players who entered still see it in their history.
+     */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedByAdminId: uuid('deleted_by_admin_id'),
     createdByAdminId: uuid('created_by_admin_id'),
     /** "Run again": the raffle this draft was copied from (which itself never changes) */
     copiedFromRaffleId: uuid('copied_from_raffle_id').references((): AnyPgColumn => raffles.id),
@@ -648,7 +655,7 @@ export const auditLog = pgTable(
   (t) => [uniqueIndex('audit_log_seq_key').on(t.seq), index('audit_log_target_idx').on(t.targetType, t.targetId)],
 )
 
-export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel', 'admin_risk_flag', 'admin_risk_clear', 'sales_options_change', 'voucher_batch_create', 'balance_adjustment_bulk'] as const
+export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel', 'admin_risk_flag', 'admin_risk_clear', 'sales_options_change', 'voucher_batch_create', 'balance_adjustment_bulk', 'raffle_delete'] as const
 
 /** Maker-checker: a sensitive action runs only when a second admin approves it. */
 export const approvals = pgTable(

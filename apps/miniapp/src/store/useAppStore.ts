@@ -153,10 +153,12 @@ export const useAppStore = create<AppState>()(
         const seen = liveVersions
         liveVersions = new Map(live.raffles.map((l) => [l.id, l.version]))
         // A raffle that appeared, disappeared, was drawn or was edited by an admin needs its full record.
-        // The first poll after opening has nothing to compare with, so it reloads once.
+        // The first poll after opening has nothing to compare with, so it reloads once. "Disappeared" is
+        // judged against the last poll, not my list: my list also holds raffles the poll never carries
+        // (drawn ones I entered that are over 30 days old or deleted), which must not reload every poll.
         const structural =
           seen === null ||
-          live.raffles.length !== raffles.length ||
+          [...seen.keys()].some((id) => !liveVersions?.has(id)) ||
           live.raffles.some((l) => {
             const k = known.get(l.id)
             return !k || (k.drawnAt ?? null) !== (l.drawnAt ?? null) || seen.get(l.id) !== l.version

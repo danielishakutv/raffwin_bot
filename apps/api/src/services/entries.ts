@@ -199,7 +199,7 @@ async function result(ctx: AppContext, userId: string, entryId: string): Promise
   if (!debit || !me) throw new Error(`entry ${entryId} has no ledger row`)
   return {
     entry: toEntry(entry),
-    raffle: await getForPlayer(ctx.db, entry.raffleId),
+    raffle: await getForPlayer(ctx.db, entry.raffleId, userId),
     balance: me.balance,
     transaction: toTransaction(debit),
   }
