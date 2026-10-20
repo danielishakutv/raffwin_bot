@@ -2,7 +2,9 @@
  * Data reset and player delete (super admin only).
  *
  *   reset          clears whole parts: players, raffles, finance, messages
- *                  ("everything" is all four). Admins, settings, feature
+ *                  ("everything" is all four), or test_money: finance minus
+ *                  what players paid for (purchases and voucher redemptions
+ *                  stay, each balance becomes what they bought). Admins, settings, feature
  *                  switches, rate history, the audit log and security events
  *                  are always kept.
  *   delete player  removes one player and everything that is theirs, so the
@@ -104,6 +106,7 @@ const APPROVALS_OF: Record<ResetPart, ApprovalAction[]> = {
   players: ['balance_adjustment', 'balance_adjustment_bulk'],
   raffles: ['raffle_cancel', 'raffle_delete'],
   finance: ['balance_adjustment', 'balance_adjustment_bulk', 'voucher_batch_create'],
+  test_money: ['balance_adjustment', 'balance_adjustment_bulk'],
   messages: [],
 }
 
@@ -123,6 +126,9 @@ async function failPending(tx: Tx, at: Date, which: { actions: ApprovalAction[] 
   return rows(tx, sql`update approvals set status = 'failed', decided_at = ${at}, result = ${JSON.stringify(result)}::jsonb where status = 'pending' and ${scope}`)
 }
 
+/** Raffs a player paid real money for: kept by test_money */
+const PAID_FOR = sql`('purchase', 'voucher')`
+
 /** Raffle photos uploaded to the media table are referenced by URL (/v1/media/<id>) */
 const MEDIA_ID = sql`substring(image_url from '/v1/media/([0-9a-fA-F-]{36})')::uuid`
 
@@ -141,6 +147,8 @@ export async function resetPreview(ctx: AppContext): Promise<AdminResetPreview> 
       entries: await count(sql`select count(*) as n from entries`),
       ledgerLines: await count(sql`select count(*) as n from ledger`),
       raffsInBalances: await count(sql`select coalesce(sum(balance_cache), 0) as n from users`),
+      testMoneyLines: await count(sql`select count(*) as n from ledger where type not in ${PAID_FOR}`),
+      raffsPaidFor: await count(sql`select coalesce(sum(raffs), 0) as n from ledger where type in ${PAID_FOR}`),
       purchases: await count(sql`select count(*) as n from purchases`),
       vouchers: await count(sql`select count(*) as n from vouchers`),
       expenses: await count(sql`select count(*) as n from finance_expenses`),
@@ -170,6 +178,8 @@ export async function resetData(ctx: AppContext, adminId: string, input: ResetIn
   const R = parts.has('raffles')
   const F = parts.has('finance')
   const M = parts.has('messages')
+  // Finance and players already clear every Raffs record
+  const T = parts.has('test_money') && !F && !P
   const before = await resetPreview(ctx)
   const backupFile = await takeBackup(ctx, 'reset')
   const at = new Date(ctx.now())
@@ -193,10 +203,10 @@ export async function resetData(ctx: AppContext, adminId: string, input: ResetIn
     if (M) deleted.broadcasts = await rows(tx, sql`delete from broadcasts`)
 
     // Money records, children before the ledger lines they point at
-    if (P || R || F) deleted.referral_earnings = await rows(tx, sql`delete from referral_earnings`)
-    if (P || F) {
+    if (P || R || F || T) deleted.referral_earnings = await rows(tx, sql`delete from referral_earnings`)
+    if (P || F || T) {
       deleted.raffs_transfers = await rows(tx, sql`delete from raffs_transfers`)
-      deleted.purchases = await rows(tx, sql`delete from purchases`)
+      if (!T) deleted.purchases = await rows(tx, sql`delete from purchases`)
       deleted.comeback_offers = await rows(tx, sql`delete from comeback_offers`)
       deleted.daily_checkins = await rows(tx, sql`delete from daily_checkins`)
     }
@@ -211,6 +221,7 @@ export async function resetData(ctx: AppContext, adminId: string, input: ResetIn
     if (R && !F) updated.finance_expenses = await rows(tx, sql`update finance_expenses set raffle_id = null where raffle_id is not null`)
 
     if (P || F) deleted.ledger = await rows(tx, sql`delete from ledger`)
+    else if (T) deleted.ledger = await rows(tx, sql`delete from ledger where type not in ${PAID_FOR}`)
     else if (R) deleted.ledger = await rows(tx, sql`delete from ledger where reference_type in ('entry', 'raffle_prize')`)
 
     if (P) deleted.feature_flag_overrides = await rows(tx, sql`delete from feature_flag_overrides where user_id is not null`)
@@ -249,8 +260,8 @@ export async function resetData(ctx: AppContext, adminId: string, input: ResetIn
       deleted.users = await rows(tx, sql`delete from users`)
     } else if (F) {
       updated.balances = await rows(tx, sql`update users set balance_cache = 0, updated_at = now() where balance_cache <> 0`)
-    } else if (R) {
-      // Balances as if those raffles had never been: what the remaining lines add up to
+    } else if (R || T) {
+      // Balances as if what was removed had never been: what the remaining lines add up to
       updated.balances = await rebuildBalances(tx)
     }
 

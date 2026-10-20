@@ -12,6 +12,9 @@ import { Button, Card, Check, Err, Field, Loading, Notice, TextInput } from '../
 
 type Counts = AdminResetPreview['counts']
 
+/** "Everything": test money is inside finance */
+const EVERYTHING: ResetPart[] = ['players', 'raffles', 'finance', 'messages']
+
 const PARTS: { part: ResetPart; title: string; clears: (c: Counts) => string; detail: string }[] = [
   {
     part: 'players',
@@ -34,6 +37,13 @@ const PARTS: { part: ResetPart; title: string; clears: (c: Counts) => string; de
       'Every Raffs record: purchases, vouchers and their batches, expenses, referral earnings, transfers, streak rewards and come-back offers. Every balance becomes 0. Players and their tickets stay. The sales site keeps its own payment records.',
   },
   {
+    part: 'test_money',
+    title: 'Test money',
+    clears: (c) => `${fmt(c.testMoneyLines)} records; balances go from ${fmt(c.raffsInBalances)} to ${fmt(c.raffsPaidFor)} Raffs`,
+    detail:
+      'Every Raffs record except what players paid for: admin top-ups, bonuses, streak and come-back rewards, referral earnings, transfers, entry spending, refunds and prizes. Each balance becomes exactly what that player bought or redeemed with a voucher; purchases and vouchers stay. Tick Raffles too to clear the test raffles and their tickets.',
+  },
+  {
     part: 'messages',
     title: 'Messages',
     clears: (c) => `${fmt(c.broadcasts)} broadcasts, ${fmt(c.notifications)} bot messages`,
@@ -49,7 +59,10 @@ export function DataReset() {
   const [confirm, setConfirm] = useState('')
   const [result, setResult] = useState<AdminResetResult | null>(null)
 
-  const all = parts.size === PARTS.length
+  const all = EVERYTHING.every((x) => parts.has(x))
+  // Players and finance already clear every Raffs record
+  const coveredTestMoney = parts.has('finance') || parts.has('players')
+  const chosen = PARTS.filter((x) => parts.has(x.part) && !(x.part === 'test_money' && coveredTestMoney))
   const toggle = (part: ResetPart, on: boolean) =>
     setParts((s) => {
       const next = new Set(s)
@@ -57,10 +70,10 @@ export function DataReset() {
       else next.delete(part)
       return next
     })
-  const ready = !!p?.available && parts.size > 0 && reason.trim().length >= 5 && confirm.trim() === p.phrase
+  const ready = !!p?.available && chosen.length > 0 && reason.trim().length >= 5 && confirm.trim() === p.phrase
 
   const run = () =>
-    void action.run(() => adminCall<AdminResetResult>('POST', '/system/reset', { parts: [...parts], reason: reason.trim(), confirm: confirm.trim() })).then((r) => {
+    void action.run(() => adminCall<AdminResetResult>('POST', '/system/reset', { parts: chosen.map((x) => x.part), reason: reason.trim(), confirm: confirm.trim() })).then((r) => {
       if (!r) return
       setResult(r)
       setParts(new Set())
@@ -85,13 +98,18 @@ export function DataReset() {
         <div className="grid gap-4">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[12.5px] font-semibold">What to reset</p>
-            <Button size="sm" variant="ghost" onClick={() => setParts(all ? new Set() : new Set(PARTS.map((x) => x.part)))}>
+            <Button size="sm" variant="ghost" onClick={() => setParts(all ? new Set() : new Set(EVERYTHING))}>
               {all ? 'Clear' : 'Everything'}
             </Button>
           </div>
           <div className="grid gap-3">
             {PARTS.map(({ part, title, clears, detail }) => (
-              <Check key={part} checked={parts.has(part)} onChange={(on) => toggle(part, on)}>
+              <Check
+                key={part}
+                checked={parts.has(part) && !(part === 'test_money' && coveredTestMoney)}
+                disabled={part === 'test_money' && coveredTestMoney}
+                onChange={(on) => toggle(part, on)}
+              >
                 <span className="font-bold">{title}</span> <span className="text-neutral-600">· {clears(p.counts)}</span>
                 <span className="mt-0.5 block text-[12px] text-neutral-600">{detail}</span>
               </Check>
@@ -107,7 +125,7 @@ export function DataReset() {
             <TextInput value={confirm} autoComplete="off" spellCheck={false} placeholder={p.phrase} onChange={(e) => setConfirm(e.target.value)} />
           </Field>
           <Button variant="danger" busy={action.busy} disabled={!ready} onClick={run}>
-            {all ? 'Reset everything' : parts.size ? `Reset ${PARTS.filter((x) => parts.has(x.part)).map((x) => x.title.toLowerCase()).join(', ')}` : 'Reset'}
+            {all ? 'Reset everything' : chosen.length ? `Reset ${chosen.map((x) => x.title.toLowerCase()).join(', ')}` : 'Reset'}
           </Button>
         </div>
       )}

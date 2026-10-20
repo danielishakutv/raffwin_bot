@@ -463,6 +463,10 @@ export interface AdminResetPreview {
     entries: number
     ledgerLines: number
     raffsInBalances: number
+    /** Raffs records that are not a purchase or a voucher redemption (what Test money removes) */
+    testMoneyLines: number
+    /** Raffs players bought or redeemed: every balance together after Test money */
+    raffsPaidFor: number
     purchases: number
     vouchers: number
     expenses: number

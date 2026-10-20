@@ -14,6 +14,7 @@ import { hashPassword, issueTicket } from '../src/admin/session'
 import { backup } from '../src/admin/data-reset'
 import { adminUsers, approvals, auditLog, entries, ledger, rafflePrizes, raffles, users, type AdminRole } from '../src/db/schema'
 import { newDrawSeed, settleRaffle } from '../src/services/draw'
+import { post } from '../src/services/ledger'
 import { createRaffle, credit, member } from './fixtures'
 import { contactProof, initData, nigerianPhone, telegramId, testApp } from './helpers'
 
@@ -230,6 +231,53 @@ describe('resetting parts', () => {
     expect(prizes.every((p) => p.winnerUserId === null && p.winnerTicket !== null)).toBe(true)
     const counts = await db.select({ id: raffles.id, n: raffles.entriesCount }).from(raffles).where(sql`${raffles.id} in (${drawn.id}, ${open.id})`)
     expect(Object.fromEntries(counts.map((r) => [r.id, r.n]))).toEqual({ [drawn.id]: 5, [open.id]: 0 })
+  })
+
+  it('test money with raffles: each balance becomes what the player bought; admin-credited players go to 0', async () => {
+    fakeBackup()
+    const admin = await signIn('super_admin')
+    const buyer = await player()
+    const credited = await player()
+    // The buyer paid for 113 Raffs and redeemed a 20-Raff voucher, was given 500 by an admin, and spent on a raffle
+    await db.transaction((tx) => post(tx, { userId: buyer.userId, type: 'purchase', raffs: 113, note: 'Bought for ₦1,100', referenceType: 'purchase', referenceId: randomUUID() }))
+    await db.transaction((tx) => post(tx, { userId: buyer.userId, type: 'voucher', raffs: 20, note: 'Voucher ...ABCD', referenceType: 'voucher', referenceId: randomUUID() }))
+    await credit(db, buyer.userId, 500)
+    await credit(db, credited.userId, 101)
+    await db.transaction((tx) => post(tx, { userId: credited.userId, type: 'bonus', raffs: 1, note: 'Day 1 streak' }))
+    const raffle = await createRaffle(db, { entryPriceRaffs: 10 })
+    await enter(buyer, raffle.id, 30, false) // 300 Raffs, more than they bought
+    await enter(credited, raffle.id, 10, false)
+    expect(await balanceOf(buyer.userId)).toBe(333)
+
+    const preview = (await http.get('/admin/v1/system/reset').set(admin)).body as AdminResetPreview
+    expect(preview.counts.raffsPaidFor).toBeGreaterThanOrEqual(133)
+
+    const res = await http.post('/admin/v1/system/reset').set(admin).send({ parts: ['raffles', 'test_money'], confirm: PHRASE, reason: 'Clear test money' })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(await balanceOf(buyer.userId)).toBe(133)
+    expect(await balanceOf(credited.userId)).toBe(0)
+    const left = await db.select().from(ledger).where(eq(ledger.userId, buyer.userId)).orderBy(ledger.createdAt, ledger.id)
+    expect(left.map((l) => [l.type, l.raffs, l.balanceAfter])).toEqual([
+      ['purchase', 113, 113],
+      ['voucher', 20, 133],
+    ])
+    expect(await count('entries')).toBe(0)
+    expect(await db.select().from(users).where(eq(users.id, credited.userId))).toHaveLength(1)
+  })
+
+  it('test money alone: tickets stay, only the Raffs records that were not paid for go', async () => {
+    fakeBackup()
+    const admin = await signIn('super_admin')
+    const m = await player()
+    await db.transaction((tx) => post(tx, { userId: m.userId, type: 'purchase', raffs: 40, note: 'Bought for ₦400', referenceType: 'purchase', referenceId: randomUUID() }))
+    await credit(db, m.userId, 60)
+    const raffle = await createRaffle(db, { entryPriceRaffs: 10 })
+    await enter(m, raffle.id, 5, false)
+    const res = await http.post('/admin/v1/system/reset').set(admin).send({ parts: ['test_money'], confirm: PHRASE, reason: 'Clear test money' })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(await balanceOf(m.userId)).toBe(40)
+    expect(await ledgerSum(m.userId)).toBe(40)
+    expect((await db.select().from(entries).where(eq(entries.raffleId, raffle.id))).map((e) => e.qty)).toEqual([5])
   })
 
   it('finance: every Raffs record goes and every balance is 0; players stay', async () => {

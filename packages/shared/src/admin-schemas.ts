@@ -276,10 +276,14 @@ export type BulkAdjustmentBody = z.infer<typeof bulkAdjustmentBody>
 /* Data reset (super admin) ------------------------------------------------ */
 
 /**
- * What a reset can clear; "everything" is all four. Admins, settings, feature
- * switches, rate history, the audit log and security events are always kept.
+ * What a reset can clear; "everything" is players, raffles, finance and
+ * messages. test_money is finance without what players paid for: every Raffs
+ * record except purchases and voucher redemptions goes, and each balance
+ * becomes what that player bought (finance, when chosen too, covers it).
+ * Admins, settings, feature switches, rate history, the audit log and
+ * security events are always kept.
  */
-export const RESET_PARTS = ['players', 'raffles', 'finance', 'messages'] as const
+export const RESET_PARTS = ['players', 'raffles', 'finance', 'test_money', 'messages'] as const
 export type ResetPart = (typeof RESET_PARTS)[number]
 
 /** The words a super admin types to confirm a reset, per environment */
