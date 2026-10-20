@@ -14,6 +14,8 @@ type Load = { state: 'loading' } | { state: 'out'; botId: number } | { state: 'i
 
 export function App() {
   const [load, setLoad] = useState<Load>({ state: 'loading' })
+  // Logged out to sign in with another Telegram account: the login screen says how to make Telegram offer it
+  const [switching, setSwitching] = useState(false)
   // State, not a memo of the first address: leaving /paid ("Buy more") must take the page back to the shop
   const [paidRef, setPaidRef] = useState(() => (location.pathname === '/paid' ? new URLSearchParams(location.search).get('reference') : null))
 
@@ -37,10 +39,20 @@ export function App() {
   }, [refresh])
   const onAuth = useCallback(
     (user: Record<string, unknown>) => {
+      setSwitching(false)
       void api.login(user).then(refresh, (error: unknown) => setLoad({ state: 'error', message: error instanceof Error ? error.message : 'Login failed.' }))
     },
     [refresh],
   )
+  const switchAccount = useCallback(() => {
+    void api.logout().then(
+      () => {
+        setSwitching(true)
+        return refresh()
+      },
+      (error: unknown) => setLoad({ state: 'error', message: error instanceof Error ? error.message : 'Could not log out.' }),
+    )
+  }, [refresh])
   useEffect(() => {
     // Back from a full-page Telegram login (phones): the signed result is in the address
     const returned = readReturnedLogin()
@@ -54,7 +66,7 @@ export function App() {
         <a href="/" className="text-[20px] font-extrabold tracking-tight text-night">
           {SITE}
         </a>
-        {load.state === 'in' && <Account me={load.me} onSignOut={() => void api.logout().then(refresh)} />}
+        {load.state === 'in' && <Account me={load.me} onSignOut={switchAccount} />}
       </header>
 
       {load.state === 'loading' && <Skeleton />}
@@ -63,8 +75,8 @@ export function App() {
           {load.message}
         </Notice>
       )}
-      {load.state === 'out' && <SignedOut botId={load.botId} onAuth={onAuth} paying={!!paidRef} />}
-      {load.state === 'in' && (paidRef ? <Paid reference={paidRef} onDone={leavePaid} /> : <Shop me={load.me} refresh={refresh} />)}
+      {load.state === 'out' && <SignedOut botId={load.botId} onAuth={onAuth} paying={!!paidRef} switching={switching} />}
+      {load.state === 'in' && (paidRef ? <Paid reference={paidRef} onDone={leavePaid} /> : <Shop me={load.me} refresh={refresh} onSwitch={switchAccount} />)}
 
       <footer className="mt-auto pt-10 text-center text-[12px] leading-relaxed text-ink/50">
         Payments are processed securely by Paystack. We never see your card details.
@@ -77,7 +89,7 @@ export function App() {
 
 /* Signed out ------------------------------------------------------------------- */
 
-function SignedOut({ botId, onAuth, paying }: { botId: number; onAuth: (u: Record<string, unknown>) => void; paying: boolean }) {
+function SignedOut({ botId, onAuth, paying, switching }: { botId: number; onAuth: (u: Record<string, unknown>) => void; paying: boolean; switching: boolean }) {
   return (
     <section className="card overflow-hidden">
       <div className="bg-night px-5 pb-6 pt-7 text-white">
@@ -87,6 +99,12 @@ function SignedOut({ botId, onAuth, paying }: { botId: number; onAuth: (u: Recor
       </div>
       <div className="flex flex-col gap-4 p-5">
         {paying && <Notice tone="info">Log in again to see your payment.</Notice>}
+        {switching && (
+          <Notice tone="info">
+            You are logged out here. Log in again and check that Telegram shows the account you play with. Telegram remembers the last account used in this browser: if it offers the same one,
+            log out of Telegram in the window it opens, or open this page in a private window.
+          </Notice>
+        )}
         <TelegramLogin botId={botId} onAuth={onAuth} />
         <ol className="grid gap-2 text-[14px] text-ink/70">
           <Step n={1}>Log in with Telegram</Step>
@@ -122,7 +140,7 @@ function Account({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
   )
 }
 
-function Shop({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
+function Shop({ me, refresh, onSwitch }: { me: Me; refresh: () => Promise<void>; onSwitch: () => void }) {
   if (!me.account) {
     return (
       <Notice tone="error" action={<Button onClick={() => void refresh()}>Try again</Button>}>
@@ -130,7 +148,7 @@ function Shop({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
       </Notice>
     )
   }
-  if (!me.account.exists) return <Notice tone="info">{me.account.message}</Notice>
+  if (!me.account.exists) return <NoAccount me={me} refresh={refresh} onSwitch={onSwitch} />
   if (!me.account.active) return <Notice tone="error">Your game account is suspended, so it cannot receive Raffs. Contact support inside the game.</Notice>
 
   return (
@@ -145,6 +163,59 @@ function Shop({ me, refresh }: { me: Me; refresh: () => Promise<void> }) {
       {me.buyer.detailsComplete ? <Buy me={me} /> : <Details onSaved={refresh} />}
       <History />
     </div>
+  )
+}
+
+/**
+ * The Telegram account logged in here has no game account. The game knows a
+ * player only by Telegram id, so the page shows exactly which account this is
+ * (a person with several Telegram accounts often logs in with the wrong one)
+ * and offers the way out: another account, or check again after opening the game.
+ */
+function NoAccount({ me, refresh, onSwitch }: { me: Me; refresh: () => Promise<void>; onSwitch: () => void }) {
+  const b = me.buyer
+  const [checking, setChecking] = useState(false)
+  return (
+    <section className="card p-5">
+      <h2 className="text-[18px] font-bold">No game account for this Telegram account</h2>
+      <p className="mt-1 text-[14px] leading-relaxed text-ink/70">You are logged in here as:</p>
+      <div className="mt-3 flex items-center gap-3 rounded-2xl bg-ink/[0.03] p-3">
+        {b.photoUrl ? (
+          <img src={b.photoUrl} alt="" className="h-11 w-11 shrink-0 rounded-full" referrerPolicy="no-referrer" />
+        ) : (
+          <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand/10 text-[16px] font-bold text-brand">
+            {(b.firstName ?? b.username ?? '?').slice(0, 1).toUpperCase()}
+          </span>
+        )}
+        <div className="min-w-0">
+          <p className="truncate text-[15px] font-bold">{b.firstName ?? (b.username ? `@${b.username}` : 'Telegram user')}</p>
+          {b.username && b.firstName && <p className="truncate text-[13px] text-ink/60">@{b.username}</p>}
+          <p className="nums text-[12px] text-ink/50">Telegram ID {b.telegramId}</p>
+        </div>
+      </div>
+      <ul className="mt-4 grid gap-2 text-[14px] leading-relaxed text-ink/70">
+        <li>
+          <b className="text-ink">Play with another Telegram account?</b> Log in with that one instead.
+        </li>
+        <li>
+          <b className="text-ink">This is the account you play with?</b> Open the game in Telegram with it once, then check again.
+        </li>
+      </ul>
+      <div className="mt-5 grid gap-2">
+        <Button solid onClick={onSwitch}>
+          Use a different Telegram account
+        </Button>
+        <Button
+          disabled={checking}
+          onClick={() => {
+            setChecking(true)
+            void refresh().finally(() => setChecking(false))
+          }}
+        >
+          {checking ? 'Checking' : 'Check again'}
+        </Button>
+      </div>
+    </section>
   )
 }
 
