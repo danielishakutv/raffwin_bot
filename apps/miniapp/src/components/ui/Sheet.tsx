@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { useEffect, type ReactNode } from 'react'
 import { cn } from './cn'
 import { haptics } from '@/services/haptics'
+import { liteMotion } from '@/services/perf'
 import { sound } from '@/services/sound'
 
 interface SheetProps {
@@ -52,7 +53,9 @@ export function Sheet({ open, onClose, title, children, heightClass = 'max-h-[92
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             onClick={onClose}
-            className="absolute inset-0 bg-ink/70 backdrop-blur-sm"
+            // On phones a full-screen blur over a page that keeps animating is redrawn every frame (twice
+            // when the enter sheet opens over the detail sheet); a darker plain backdrop costs nothing
+            className={cn('absolute inset-0', liteMotion ? 'bg-ink/85' : 'bg-ink/70 backdrop-blur-sm')}
           />
           <motion.div
             drag="y"

@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion'
 import { Clock, Trophy, Users } from 'lucide-react'
 import { Chip } from '@/components/ui/Chip'
 import { cn } from '@/components/ui/cn'
@@ -7,9 +6,9 @@ import { PrizeVisual } from '@/components/ui/PrizeVisual'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import { RaffsCoin } from '@/components/ui/RaffsCoin'
 import { Spinner } from '@/components/ui/Spinner'
-import { useNow } from '@/hooks/useNow'
+import { useNowAt } from '@/hooks/useNowAt'
 import { prizeLabel, trophyClass, winnerName, winnersLabel } from '@/data/prizes'
-import { getRaffleStatus, isUrgent, STATUS_LABEL } from '@/data/raffleStatus'
+import { CLOSING_SOON_MS, getRaffleStatus, isUrgent, STATUS_LABEL, URGENT_MS } from '@/data/raffleStatus'
 import type { Raffle } from '@/data/types'
 import { formatDate, formatInt, formatNaira, formatRaffs } from '@/services/format'
 
@@ -21,7 +20,10 @@ interface RaffleCardProps {
 
 /** The ticket. Top: prize on its own gradient. Stub: pool, price, countdown, CTA. */
 export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
-  const now = useNow(1000)
+  // The card changes look only at these moments; the Countdown inside ticks by itself.
+  // Every card re-rendering every second was the deck's steadiest load on phones.
+  const deadline = Date.parse(raffle.deadline)
+  const now = useNowAt([deadline - CLOSING_SOON_MS, deadline - URGENT_MS, deadline])
   const status = getRaffleStatus(raffle, now)
   const urgent = isUrgent(raffle, now)
   const progress = raffle.entriesCount / raffle.entriesTarget
@@ -42,7 +44,7 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
           onOpen()
         }
       }}
-      className="flex h-full w-full cursor-pointer select-none flex-col overflow-hidden rounded-card shadow-float [filter:drop-shadow(0_24px_30px_rgba(0,0,0,0.35))]"
+      className="flex h-full w-full cursor-pointer select-none flex-col overflow-hidden rounded-card shadow-float"
       aria-label={`${raffle.prizeName}, ${STATUS_LABEL[status]}`}
     >
       {/* Prize panel */}
@@ -55,26 +57,24 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
         <div className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-white/20 blur-2xl" />
         <div className="pointer-events-none absolute -left-10 bottom-0 h-32 w-32 rounded-full bg-ink/30 blur-2xl" />
         <div className="relative flex items-center justify-between">
-          <Chip tone={statusTone[status]} className="bg-ink/40 backdrop-blur" icon={status === 'drawing' ? <Spinner className="h-3 w-3" /> : undefined}>
+          <Chip tone={statusTone[status]} className="bg-ink/50" icon={status === 'drawing' ? <Spinner className="h-3 w-3" /> : undefined}>
             {STATUS_LABEL[status]}
           </Chip>
-          <span className="rounded-pill bg-white/20 px-2.5 py-1 text-[11px] font-bold text-white backdrop-blur">
+          <span className="rounded-pill bg-white/20 px-2.5 py-1 text-[11px] font-bold text-white">
             {raffle.category}
           </span>
         </div>
-        <motion.div
-          animate={live ? { y: [0, -6, 0] } : undefined}
-          transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
-          className={cn('relative mx-auto mt-2 h-40 [transform:translateZ(30px)]', raffle.imageUrl ? 'w-full max-w-[17rem]' : 'w-40')}
-        >
-          <PrizeVisual
-            kind={raffle.kind}
-            hue={raffle.hue}
-            imageUrl={raffle.imageUrl}
-            rounded="rounded-2xl ring-1 ring-white/25 shadow-[0_18px_30px_-8px_rgba(0,0,0,0.5)]"
-            className="h-full w-full drop-shadow-[0_18px_24px_rgba(0,0,0,0.35)]"
-          />
-        </motion.div>
+        <div className={cn('relative mx-auto mt-2 h-40 [transform:translateZ(30px)]', raffle.imageUrl ? 'w-full max-w-[17rem]' : 'w-40')}>
+          <div className={cn('h-full w-full', live && 'animate-bob will-change-transform')}>
+            <PrizeVisual
+              kind={raffle.kind}
+              hue={raffle.hue}
+              imageUrl={raffle.imageUrl}
+              rounded="rounded-2xl ring-1 ring-white/25 shadow-[0_18px_30px_-8px_rgba(0,0,0,0.5)]"
+              className="h-full w-full drop-shadow-[0_18px_24px_rgba(0,0,0,0.35)]"
+            />
+          </div>
+        </div>
         {status === 'drawn' && (
           <div className="pointer-events-none absolute right-4 top-14 rotate-[-14deg] rounded-lg border-[3px] border-sun px-3 py-1 font-display text-xl font-extrabold tracking-wider text-sun opacity-90">
             DRAWN
@@ -148,22 +148,20 @@ export function RaffleCard({ raffle, onOpen, onEnter }: RaffleCardProps) {
         )}
 
         <div className="mt-auto pt-4">
-          <motion.button
+          <button
             type="button"
-            whileTap={{ scale: 0.94 }}
-            transition={{ type: 'spring', stiffness: 520, damping: 15 }}
             onClick={(e) => {
               e.stopPropagation()
               onEnter()
             }}
             className={cn(
-              'tap flex h-12 w-full items-center justify-center gap-2 rounded-field font-display text-[15px] font-bold',
+              'tap flex h-12 w-full items-center justify-center gap-2 rounded-field font-display text-[15px] font-bold transition-transform duration-100 active:scale-[0.94]',
               live ? 'bg-brand text-white shadow-glow' : status === 'drawing' ? 'bg-sunny text-ink shadow-glow-sun' : 'glass text-cloud',
               live && 'animate-pulse-glow',
             )}
           >
             {live ? 'Enter raffle' : status === 'drawing' ? 'Drawing now' : 'See the winners'}
-          </motion.button>
+          </button>
         </div>
       </div>
     </div>

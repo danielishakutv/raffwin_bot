@@ -18,6 +18,8 @@ export type SoundName =
 
 type Wave = OscillatorType
 
+const NOISE_SECONDS = 1
+
 interface ToneOptions {
   freq: number
   type?: Wave
@@ -32,6 +34,7 @@ class SoundEngine {
   private ctx: AudioContext | null = null
   private master: GainNode | null = null
   private musicGain: GainNode | null = null
+  private noiseBuf: AudioBuffer | null = null
   private musicTimer: number | null = null
   private musicStep = 0
   private musicNextTime = 0
@@ -106,12 +109,8 @@ class SoundEngine {
     const master = this.master
     if (!ctx || !master) return
     const t0 = ctx.currentTime + start
-    const frames = Math.max(1, Math.floor(ctx.sampleRate * duration))
-    const buffer = ctx.createBuffer(1, frames, ctx.sampleRate)
-    const data = buffer.getChannelData(0)
-    for (let i = 0; i < frames; i += 1) data[i] = Math.random() * 2 - 1
     const src = ctx.createBufferSource()
-    src.buffer = buffer
+    src.buffer = this.noiseBuffer(ctx)
     const filter = ctx.createBiquadFilter()
     filter.type = 'bandpass'
     filter.Q.value = 0.8
@@ -124,8 +123,20 @@ class SoundEngine {
     src.connect(filter)
     filter.connect(g)
     g.connect(master)
-    src.start(t0)
+    // A random slice of the shared second of noise, so repeated hits do not sound identical
+    src.start(t0, Math.random() * Math.max(0, NOISE_SECONDS - duration - 0.05))
     src.stop(t0 + duration + 0.02)
+  }
+
+  /** One second of white noise, made once: a drumroll used to fill ~30 fresh buffers on the spot */
+  private noiseBuffer(ctx: AudioContext): AudioBuffer {
+    if (!this.noiseBuf || this.noiseBuf.sampleRate !== ctx.sampleRate) {
+      const frames = Math.floor(ctx.sampleRate * NOISE_SECONDS)
+      this.noiseBuf = ctx.createBuffer(1, frames, ctx.sampleRate)
+      const data = this.noiseBuf.getChannelData(0)
+      for (let i = 0; i < frames; i += 1) data[i] = Math.random() * 2 - 1
+    }
+    return this.noiseBuf
   }
 
   play(name: SoundName): void {

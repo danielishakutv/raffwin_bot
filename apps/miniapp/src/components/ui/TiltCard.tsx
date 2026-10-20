@@ -11,7 +11,7 @@ interface TiltCardProps {
 }
 
 /**
- * Subtle 3D tilt that follows the pointer/finger. Transform-only, so it stays
+ * Subtle 3D tilt that follows the mouse. Transform-only, so it stays
  * cheap on mid-range phones. Disabled automatically for reduced motion.
  */
 export function TiltCard({ children, className, max = 9, disabled = false }: TiltCardProps) {
@@ -23,7 +23,8 @@ export function TiltCard({ children, className, max = 9, disabled = false }: Til
   const active = !disabled && !reduce
 
   const onMove = (event: PointerEvent<HTMLDivElement>) => {
-    if (!active) return
+    // A mouse only: under a finger the card would turn in 3D during every tap and swipe
+    if (!active || event.pointerType !== 'mouse') return
     const rect = event.currentTarget.getBoundingClientRect()
     const px = (event.clientX - rect.left) / rect.width
     const py = (event.clientY - rect.top) / rect.height

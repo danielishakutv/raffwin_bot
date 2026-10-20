@@ -14,6 +14,7 @@ import { Sparkline } from '@/components/ui/Sparkline'
 import { useNow } from '@/hooks/useNow'
 import { getRaffleStatus, isEnterable, isUrgent } from '@/data/raffleStatus'
 import { PhoneSheet } from '@/features/phone/PhoneShare'
+import { NoDrawsToday } from '@/features/raffles/NoDrawsToday'
 import { StreakCard } from '@/features/streak/StreakCard'
 import { formatNaira } from '@/services/format'
 import { haptics } from '@/services/haptics'
@@ -182,7 +183,11 @@ export function DashboardPage() {
             Enter this raffle
           </BouncyButton>
         </motion.section>
-      ) : null}
+      ) : (
+        <motion.div variants={popIn}>
+          <NoDrawsToday />
+        </motion.div>
+      )}
 
       {/* Closing soon list */}
       {stats.closingSoon.length > 0 && (

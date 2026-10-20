@@ -10,6 +10,7 @@ import type { Raffle } from '@/data/types'
 import { useAppStore } from '@/store/useAppStore'
 import { RaffleDeck } from './RaffleDeck'
 import { RaffleDetailSheet } from './RaffleDetailSheet'
+import { NoDrawsToday } from './NoDrawsToday'
 
 /** The main feature: the swipe deck, with the detail sheet driven by /raffles/:id. */
 export function RafflesPage() {
@@ -77,6 +78,9 @@ export function RafflesPage() {
           )}
         </AnimatePresence>
       </div>
+
+      {/* Nothing open to enter: say so, above any drawn raffles still in the deck */}
+      {live === 0 && <NoDrawsToday />}
 
       {sorted.length > 0 && (
         <RaffleDeck

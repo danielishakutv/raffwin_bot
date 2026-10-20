@@ -17,6 +17,12 @@ interface RaffleDeckProps {
 
 const PEEK = 26
 const GAP = 14
+/**
+ * How far a finger may slide and still count as a tap. The drag itself starts
+ * at 3px, and a fingertip on a phone wanders that far on an ordinary tap: when
+ * any drag cancelled the tap, "Enter raffle" needed two or three tries.
+ */
+const TAP_SLOP = 10
 
 /**
  * Horizontal swipe deck. One draggable track; each card scales and turns
@@ -77,7 +83,10 @@ export function RaffleDeck({ raffles, index, onIndexChange, onOpen, onEnter }: R
         dragElastic={0.14}
         dragMomentum={false}
         onDragStart={() => {
-          dragging.current = true
+          dragging.current = false
+        }}
+        onDrag={(_, info) => {
+          if (Math.abs(info.offset.x) > TAP_SLOP) dragging.current = true
         }}
         onDragEnd={(_, info) => {
           window.setTimeout(() => {
@@ -110,11 +119,9 @@ export function RaffleDeck({ raffles, index, onIndexChange, onOpen, onEnter }: R
       {/* Progress dots */}
       <div className="mt-4 flex items-center justify-center gap-1.5" aria-hidden>
         {raffles.map((r, i) => (
-          <motion.span
+          <span
             key={r.id}
-            animate={{ width: i === index ? 22 : 6, opacity: i === index ? 1 : 0.35 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-            className={cn('h-1.5 rounded-pill', i === index ? 'bg-brand' : 'bg-white')}
+            className={cn('h-1.5 rounded-pill transition-[width,opacity] duration-300', i === index ? 'w-[22px] bg-brand opacity-100' : 'w-1.5 bg-white opacity-35')}
           />
         ))}
       </div>

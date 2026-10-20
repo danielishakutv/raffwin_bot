@@ -169,6 +169,48 @@
   height: 2px;
 }
 
+/* The main call to action breathes. The glow is a pseudo-element that only
+   changes opacity and scale (composited), never box-shadow (a repaint every frame). */
+@utility animate-pulse-glow {
+  position: relative;
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow:
+      0 0 0 3px rgba(242, 53, 141, 0.55),
+      0 14px 40px -6px rgba(242, 53, 141, 0.8);
+    opacity: 0;
+    animation: pulseGlow 1.6s ease-out infinite;
+  }
+}
+@keyframes pulseGlow {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.05, 1.22);
+  }
+}
+
+/* While a live draw is on screen the app underneath is covered: stop painting it and pause its loops */
+html[data-draw-show] #root {
+  visibility: hidden;
+}
+html[data-draw-show] #root * {
+  animation-play-state: paused !important;
+}
+
+/* Lite motion (phones): the background orbs stay put instead of drifting */
+html[data-lite] [data-orbs] > * {
+  animation: none;
+}
+
 /* Admin: soft entrances. Content rises 4px and fades in; sheets slide up.
    Fill "backwards" only: a held transform would trap position:fixed children (the phone Save bar). */
 @keyframes admin-in {
