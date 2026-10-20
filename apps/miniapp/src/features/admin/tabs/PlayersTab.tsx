@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import { ArrowLeft, ChevronRight, Search } from 'lucide-react'
+import { ArrowLeft, Check as CheckIcon, ChevronRight, Search } from 'lucide-react'
 import type { AdminApproval, AdminUserDetail, AdminUserSummary } from '@raffwin/shared/admin-types'
 import { adminCall } from '../adminSession'
 import { fmt, useAction, useLoad, when } from '../hooks'
 import { askText } from '../ask'
 import { PhoneLink } from '../PhoneLink'
 import { Badge, Button, Card, Empty, Err, KeyValues, Loading, Notice, Segmented, TabHeading, TextInput } from '../ui'
-import { PlayerBotMessages, PlayerDelivery, PlayerEngagement, PlayerFeatures } from './PlayerCards'
+import { BulkAdjust } from './BulkAdjust'
+import { MakeAdmin, PlayerBotMessages, PlayerDelivery, PlayerEngagement, PlayerFeatures } from './PlayerCards'
 
 type Filter = '' | 'no_phone' | 'blocked' | 'inactive'
 const FILTERS: { value: Filter; label: string }[] = [
@@ -22,12 +23,69 @@ export function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boo
   const [filter, setFilter] = useState<Filter>('')
   const { data, error, busy } = useLoad<AdminUserSummary[]>(`/users?q=${encodeURIComponent(query)}${filter ? `&filter=${filter}` : ''}`, 15_000)
   const [selected, setSelected] = useState<string | null>(null)
+  const canBulk = can.includes('users.adjust.request')
+  // Picking players for a bulk adjustment: the picks survive new searches and filters
+  const [picking, setPicking] = useState(false)
+  const [picked, setPicked] = useState<Map<string, AdminUserSummary>>(new Map())
+  const [reviewing, setReviewing] = useState(false)
+  const [done, setDone] = useState<string | null>(null)
+  const toggle = (u: AdminUserSummary) =>
+    setPicked((m) => {
+      const next = new Map(m)
+      if (next.has(u.id)) next.delete(u.id)
+      else next.set(u.id, u)
+      return next
+    })
+  const remove = (ids: string[]) =>
+    setPicked((m) => {
+      const next = new Map(m)
+      for (const id of ids) next.delete(id)
+      return next
+    })
+  const allShownPicked = !!data?.length && data.every((u) => picked.has(u.id))
 
   if (selected) return <PlayerDetail id={selected} can={can} superAdmin={superAdmin} onBack={() => setSelected(null)} />
+  if (reviewing)
+    return (
+      <BulkAdjust
+        picked={[...picked.values()]}
+        superAdmin={superAdmin}
+        onRemove={remove}
+        onBack={() => setReviewing(false)}
+        onDone={(message) => {
+          setDone(message)
+          setPicked(new Map())
+          setPicking(false)
+          setReviewing(false)
+        }}
+      />
+    )
 
   return (
     <>
-      <TabHeading title="Players" sub="Search by username, name, phone or Telegram id." />
+      <TabHeading
+        title="Players"
+        sub="Search by username, name, phone or Telegram id."
+        aside={
+          canBulk && (
+            <Button
+              size="sm"
+              variant={picking ? 'solid' : 'outline'}
+              onClick={() => {
+                if (picking) setPicked(new Map())
+                setPicking(!picking)
+              }}
+            >
+              {picking ? 'Stop selecting' : 'Select for bulk adjust'}
+            </Button>
+          )
+        }
+      />
+      {done && (
+        <Notice tone="success" className="mb-3" onClose={() => setDone(null)}>
+          {done}
+        </Notice>
+      )}
       <Segmented<Filter> className="mb-3" size="sm" value={filter} onChange={setFilter} options={FILTERS} />
       <form
         className="mb-4 flex gap-2"
@@ -45,21 +103,55 @@ export function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boo
         </Button>
       </form>
       <Err message={error} />
+      {picking && data && data.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-[12.5px] text-neutral-600">
+          <span>Tap players to select them. Search again to add more; your picks stay.</span>
+          <Button
+            size="sm"
+            className="ml-auto"
+            onClick={() =>
+              setPicked((m) => {
+                const next = new Map(m)
+                for (const u of data) {
+                  if (allShownPicked) next.delete(u.id)
+                  else next.set(u.id, u)
+                }
+                return next
+              })
+            }
+          >
+            {allShownPicked ? `Unselect these ${data.length}` : `Select all ${data.length} shown`}
+          </Button>
+        </div>
+      )}
       {!data ? (
         <Loading />
       ) : data.length === 0 ? (
         <Empty title="No players found">{filter ? 'Nobody matches this filter and search.' : undefined}</Empty>
       ) : (
         <ul className="grid gap-2 lg:grid-cols-2">
-          {data.map((u) => (
-            <li
-              key={u.id}
-              className="admin-in min-w-0 rounded-xl border border-black/15 bg-white transition-[box-shadow,border-color] duration-200 hover:border-black/40 hover:shadow-[0_6px_20px_-12px_rgba(0,0,0,0.35)]"
-            >
-              <button type="button" onClick={() => setSelected(u.id)} className="flex w-full min-w-0 items-center gap-3 p-3.5 pb-2 text-left">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-[14px] font-bold uppercase">
-                  {(u.username ?? u.fullName ?? '?').slice(0, 1)}
-                </span>
+          {data.map((u) => {
+            const on = picked.has(u.id)
+            return (
+              <li
+                key={u.id}
+                className={`admin-in min-w-0 rounded-xl border bg-white transition-[box-shadow,border-color] duration-200 hover:border-black/40 hover:shadow-[0_6px_20px_-12px_rgba(0,0,0,0.35)] ${on ? 'border-black ring-1 ring-black' : 'border-black/15'}`}
+              >
+                <button
+                  type="button"
+                  aria-pressed={picking ? on : undefined}
+                  onClick={() => (picking ? toggle(u) : setSelected(u.id))}
+                  className="flex w-full min-w-0 items-center gap-3 p-3.5 pb-2 text-left"
+                >
+                  {picking ? (
+                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 ${on ? 'border-black bg-black text-white' : 'border-black/25 bg-white'}`}>
+                      {on && <CheckIcon size={18} strokeWidth={3} />}
+                    </span>
+                  ) : (
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-[14px] font-bold uppercase">
+                      {(u.username ?? u.fullName ?? '?').slice(0, 1)}
+                    </span>
+                  )}
                 <span className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                     <span className="font-bold">@{u.username ?? '-'}</span>
@@ -72,15 +164,27 @@ export function PlayersTab({ can, superAdmin }: { can: string[]; superAdmin: boo
                     Telegram {u.telegramId} · seen {when(u.lastSeenAt)}
                   </span>
                 </span>
-                <ChevronRight size={16} className="shrink-0 text-neutral-400" />
-              </button>
-              {/* Outside the button: the number is a call link with its own copy button */}
-              <div className="px-3.5 pb-3 pl-[66px]">
-                <PhoneLink phone={u.phone} verified={u.phoneVerified} size="sm" />
-              </div>
-            </li>
-          ))}
+                  {!picking && <ChevronRight size={16} className="shrink-0 text-neutral-400" />}
+                </button>
+                {/* Outside the button: the number is a call link with its own copy button */}
+                <div className="px-3.5 pb-3 pl-[66px]">
+                  <PhoneLink phone={u.phone} verified={u.phoneVerified} size="sm" />
+                </div>
+              </li>
+            )
+          })}
         </ul>
+      )}
+      {picking && picked.size > 0 && (
+        <div className="admin-in sticky bottom-3 z-10 mt-4 flex flex-wrap items-center gap-2 rounded-xl border-2 border-black bg-white p-3 shadow-[0_10px_30px_-12px_rgba(0,0,0,0.45)]">
+          <span className="text-[13px] font-bold">{fmt(picked.size)} selected</span>
+          <Button size="sm" variant="ghost" onClick={() => setPicked(new Map())}>
+            Clear
+          </Button>
+          <Button size="sm" variant="solid" className="ml-auto" onClick={() => setReviewing(true)}>
+            Adjust balances
+          </Button>
+        </div>
       )}
     </>
   )
@@ -175,9 +279,12 @@ function PlayerDetail({ id, can, superAdmin, onBack }: { id: string; can: string
                 ['Bot can message', d.user.botBlocked ? <Badge tone="solid">no · blocked the bot</Badge> : 'yes'],
                 ['Referred by', d.user.referredByUsername ? `@${d.user.referredByUsername}` : 'nobody'],
                 ['Referred', `${d.referrals.people} people, earned ${fmt(d.referrals.raffsEarned)} Raffs`],
+                ['Admin', d.admin ? `${d.admin.name} · ${d.admin.role.replace('_', ' ')}${d.admin.status === 'disabled' ? ' (disabled)' : ''}` : 'no'],
               ]}
             />
           </Card>
+
+          {can.includes('admins.manage') && !d.admin && <MakeAdmin d={d} onMade={reload} />}
 
           <div className="grid gap-4 xl:grid-cols-2">
             <PlayerEngagement d={d} />

@@ -90,7 +90,9 @@ Admins can change their own password. Super admins add, reset and disable admins
   and reverses the referral credit on each.
 - **Maker-checker.** A rate-base change, a balance adjustment or a raffle cancellation
   waits as a pending approval. It runs only when a different admin approves it, and the
-  database itself refuses self-approval.
+  database itself refuses self-approval. A bulk adjustment (the same amount for up to 500
+  players picked in Admin > Players, at most 10,000,000 Raffs in all) is one approval,
+  applied to every player or none; a bulk debit never takes anyone below zero.
 
 ## 5. Prize delivery (KYC)
 

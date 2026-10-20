@@ -7,6 +7,7 @@ import { z } from 'zod'
 import {
   adjustmentBody,
   broadcastBody,
+  bulkAdjustmentBody,
   decisionBody,
   engagementBody,
   expenseBody,
@@ -26,7 +27,7 @@ import {
 import { cursorQuery } from '@raffwin/shared/schemas'
 import type { AdminMe } from '@raffwin/shared/admin-types'
 import type { AppContext } from '../context'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { NOTIFICATION_KINDS, raffles, users } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { requestMeta } from '../http/middleware'
@@ -250,6 +251,21 @@ export function adminRoutes(ctx: AppContext): Router {
     const [u] = await ctx.db.select({ username: users.username }).from(users).where(eq(users.id, id))
     if (!u) throw new HttpError('NOT_FOUND', 'No such user.')
     await askOrRun(req, res, 'balance_adjustment', { userId: id, username: u.username, raffs: body.raffs }, body.reason)
+  })
+  // The same amount for many players at once: one approval, applied to all of them or none
+  r.post('/users/bulk-adjust', authed, perm('users.adjust.request'), async (req, res) => {
+    const body = bulkAdjustmentBody.parse(req.body)
+    const found = await ctx.db.select({ id: users.id, username: users.username }).from(users).where(inArray(users.id, body.userIds))
+    if (found.length !== body.userIds.length) {
+      throw new HttpError('NOT_FOUND', `${body.userIds.length - found.length} of the selected players do not exist. Refresh and select again.`)
+    }
+    const byId = new Map(found.map((u) => [u.id, u.username]))
+    const list = body.userIds.map((id) => ({ userId: id, username: byId.get(id) ?? null }))
+    await askOrRun(req, res, 'balance_adjustment_bulk', { users: list, raffs: body.raffs }, body.reason)
+  })
+  // Make this player an admin (super admin): bound to their Telegram account at once
+  r.post('/users/:id/make-admin', authed, perm('admins.manage'), async (req, res) => {
+    res.status(201).json(await admins.createFromPlayer(ctx, adminId(req), idParam(req), admins.fromPlayerBody.parse(req.body)))
   })
 
   /* Settings --------------------------------------------------------------- */

@@ -4,7 +4,7 @@
  * same transaction that marks it approved. The database also refuses
  * decided_by = requested_by (approvals_two_people).
  */
-import { desc, eq, sql } from 'drizzle-orm'
+import { desc, eq, inArray, sql } from 'drizzle-orm'
 import type { AdminApproval } from '@raffwin/shared/admin-types'
 import type { AppContext } from '../context'
 import { adminUsers, approvals, APPROVAL_ACTIONS, entries, raffles, referralEarnings, users } from '../db/schema'
@@ -27,6 +27,8 @@ export interface Payloads {
   sales_options_change: { sales: SalesSettings; previous: SalesSettings }
   voucher_batch_create: { vendor: string; note: string; valueRaffs: number; count: number; expiresAt: string | null }
   balance_adjustment: { userId: string; username: string | null; raffs: number }
+  /** The same signed amount for every player listed; applied to all of them or none */
+  balance_adjustment_bulk: { users: { userId: string; username: string | null }[]; raffs: number }
   raffle_cancel: { raffleId: string; prizeName: string; entriesCount: number }
   admin_risk_flag: { adminId: string; name: string }
   admin_risk_clear: { adminId: string; name: string }
@@ -53,6 +55,15 @@ export function summarise(action: Action, payload: Record<string, unknown>): str
     case 'balance_adjustment': {
       const p = payload as unknown as Payloads['balance_adjustment']
       return `${p.raffs > 0 ? 'Credit' : 'Debit'} ${Math.abs(p.raffs).toLocaleString('en-NG')} Raffs ${p.raffs > 0 ? 'to' : 'from'} @${p.username ?? p.userId}`
+    }
+    case 'balance_adjustment_bulk': {
+      const p = payload as unknown as Payloads['balance_adjustment_bulk']
+      const n = p.users.length
+      const each = Math.abs(p.raffs).toLocaleString('en-NG')
+      const total = (Math.abs(p.raffs) * n).toLocaleString('en-NG')
+      const names = p.users.slice(0, 5).map((u) => `@${u.username ?? u.userId}`).join(', ')
+      const more = n > 5 ? ` and ${(n - 5).toLocaleString('en-NG')} more` : ''
+      return `${p.raffs > 0 ? 'Credit' : 'Debit'} ${each} Raffs each ${p.raffs > 0 ? 'to' : 'from'} ${n.toLocaleString('en-NG')} player${n === 1 ? '' : 's'} (${total} Raffs in all): ${names}${more}`
     }
     case 'raffle_cancel': {
       const p = payload as unknown as Payloads['raffle_cancel']
@@ -298,6 +309,10 @@ async function execute(
       const told = p.raffs > 0 ? await tellCredit(ctx, tx, u, p.raffs, row.id, row.balanceAfter) : false
       return { ledgerId: row.id, balanceAfter: row.balanceAfter, playerTold: told }
     }
+    case 'balance_adjustment_bulk': {
+      const p = payload as Payloads['balance_adjustment_bulk']
+      return bulkAdjust(ctx, tx, p)
+    }
     case 'raffle_cancel': {
       const p = payload as Payloads['raffle_cancel']
       return cancelRaffle(tx, p.raffleId, adminId, at)
@@ -308,6 +323,48 @@ async function execute(
       return applyRisk(tx, action, p.adminId, reason, at)
     }
   }
+}
+
+/**
+ * One amount for many players, in one transaction: every player gets it or
+ * nobody does. Users are locked in id order (the order cancelRaffle uses) so
+ * this cannot deadlock with a refund. A debit never takes anyone below zero;
+ * it is refused naming who is short, and nothing changes.
+ */
+async function bulkAdjust(ctx: AppContext, tx: Tx, p: Payloads['balance_adjustment_bulk']): Promise<Record<string, unknown>> {
+  const ids = [...new Set(p.users.map((u) => u.userId))].sort()
+  const locked = await tx
+    .select({ id: users.id, telegramId: users.telegramId, username: users.username, balance: users.balanceCache })
+    .from(users)
+    .where(inArray(users.id, ids))
+    .orderBy(users.id)
+    .for('update')
+  if (locked.length !== ids.length) {
+    throw new HttpError('NOT_FOUND', `${ids.length - locked.length} of the selected players no longer exist. Ask again without them.`)
+  }
+  if (p.raffs < 0) {
+    const short = locked.filter((u) => u.balance + p.raffs < 0)
+    if (short.length) {
+      const names = short.slice(0, 10).map((u) => `@${u.username ?? u.id} (${u.balance.toLocaleString('en-NG')})`).join(', ')
+      const more = short.length > 10 ? ` and ${short.length - 10} more` : ''
+      throw new HttpError(
+        'INSUFFICIENT_FUNDS',
+        `${short.length} player${short.length === 1 ? ' has' : 's have'} less than ${Math.abs(p.raffs).toLocaleString('en-NG')} Raffs: ${names}${more}. Nothing was changed; take them off the list and ask again.`,
+      )
+    }
+  }
+  let told = 0
+  for (const u of locked) {
+    const row = await post(tx, {
+      userId: u.id,
+      type: 'adjustment',
+      raffs: p.raffs,
+      note: p.raffs > 0 ? 'Credit from Raffle Win support' : 'Correction by Raffle Win support',
+      referenceType: 'approval',
+    })
+    if (p.raffs > 0 && (await tellCredit(ctx, tx, u, p.raffs, row.id, row.balanceAfter))) told += 1
+  }
+  return { players: locked.length, raffsEach: p.raffs, raffsTotal: p.raffs * locked.length, playersTold: told }
 }
 
 /** "You received 500 Raffs from Raffle Win", to the player's bot chat (sent by the outbox). */

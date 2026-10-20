@@ -3,12 +3,12 @@
  * messages (PlayersTab). Each card reads straight from AdminUserDetail.
  */
 import { useState } from 'react'
-import type { AdminFeatureOverride, AdminNotification, AdminUserDetail, AdminUserFeature } from '@raffwin/shared/admin-types'
+import type { AdminFeatureOverride, AdminNotification, AdminRole, AdminUserDetail, AdminUserFeature } from '@raffwin/shared/admin-types'
 import { ApiError } from '@/api/errors'
 import { adminCall } from '../adminSession'
-import { askText } from '../ask'
+import { askConfirm, askText } from '../ask'
 import { plainText, relative, useAction, when } from '../hooks'
-import { Badge, Button, Card, Err, KeyValues, Notice } from '../ui'
+import { Badge, Button, Card, Err, Field, KeyValues, Notice, Select, TextInput } from '../ui'
 
 export function PlayerEngagement({ d }: { d: AdminUserDetail }) {
   const e = d.engagement
@@ -149,6 +149,94 @@ export function PlayerFeatures({ d, canManage, onChanged }: { d: AdminUserDetail
           </li>
         ))}
       </ul>
+    </Card>
+  )
+}
+
+const ADMIN_ROLES: AdminRole[] = ['viewer', 'support', 'raffle_manager', 'finance', 'super_admin']
+
+/**
+ * Make this player an admin (super admin). The account is bound to their
+ * Telegram at once; the generated password is shown here once, to pass on in person.
+ */
+export function MakeAdmin({ d, onMade }: { d: AdminUserDetail; onMade: () => void }) {
+  const action = useAction()
+  const [open, setOpen] = useState(false)
+  const suggested = (d.user.username ?? d.user.tgUsername ?? '').toLowerCase().replace(/[^a-z0-9_.]/g, '').slice(0, 32)
+  const [form, setForm] = useState({ name: d.user.fullName ?? '', username: suggested, role: 'viewer' as AdminRole })
+  const [secret, setSecret] = useState<string | null>(null)
+
+  if (secret)
+    return (
+      <div className="admin-in rounded-xl border-2 border-black bg-white p-4">
+        <p className="text-[13px] font-bold">
+          {form.name} is now an admin. Their sign-in: username <span className="font-mono">{form.username}</span> and this password
+        </p>
+        <p className="mt-2 select-all break-all rounded-lg bg-neutral-100 px-3 py-2 font-mono text-[15px] font-bold">{secret}</p>
+        <p className="mt-2 text-[12px] text-neutral-600">
+          Shown once. Give it to them in person or a trusted channel, with the master password. Their Telegram account is already bound: they sign in from the bot.
+        </p>
+        <Button size="sm" className="mt-3" onClick={() => setSecret(null)}>
+          I have passed it on
+        </Button>
+      </div>
+    )
+
+  return (
+    <Card
+      title="Make admin"
+      subtitle="Gives this player's Telegram account access to the admin screen."
+      actions={
+        !open && (
+          <Button size="sm" onClick={() => setOpen(true)}>
+            Make admin
+          </Button>
+        )
+      }
+    >
+      {open ? (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Full name">
+            <TextInput autoCapitalize="words" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </Field>
+          <Field label="Admin username" hint="3-32 of a-z 0-9 _ .">
+            <TextInput autoCapitalize="off" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          </Field>
+          <Field label="Role">
+            <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as AdminRole })}>
+              {ADMIN_ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r.replace('_', ' ')}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Err message={action.error} className="sm:col-span-3" />
+          <div className="flex flex-wrap gap-2 sm:col-span-3">
+            <Button
+              variant="solid"
+              busy={action.busy}
+              disabled={form.name.trim().length < 2 || form.username.trim().length < 3}
+              onClick={async () => {
+                const role = form.role.replace('_', ' ')
+                if (!(await askConfirm(`Make @${d.user.username ?? d.user.telegramId} an admin with the role ${role}?`, 'Make admin', form.role === 'super_admin'))) return
+                const r = await action.run(() => adminCall<{ password: string }>('POST', `/users/${d.user.id}/make-admin`, form))
+                if (r) {
+                  setSecret(r.password)
+                  onMade()
+                }
+              }}
+            >
+              Make admin
+            </Button>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-[13px] text-neutral-600">Not an admin. Bound by their Telegram id, so a username change cannot move the access to someone else.</p>
+      )}
     </Card>
   )
 }

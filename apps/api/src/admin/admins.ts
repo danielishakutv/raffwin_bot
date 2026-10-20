@@ -9,7 +9,7 @@ import { and, asc, eq, ne, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../context'
 import { uniqueViolation } from '../db/client'
-import { ADMIN_ROLES, adminSessions, adminUsers, type AdminUserRow } from '../db/schema'
+import { ADMIN_ROLES, adminSessions, adminUsers, users, type AdminUserRow } from '../db/schema'
 import { HttpError } from '../lib/http-error'
 import { recordSecurityEvent } from '../lib/security-events'
 import { appendAudit } from './audit'
@@ -102,6 +102,66 @@ export async function create(
     if (c === 'admin_users_username_key') throw new HttpError('INVALID_INPUT', 'That admin username is taken.', { username: 'Taken' })
     if (c === 'admin_users_telegram_username_key') {
       throw new HttpError('INVALID_INPUT', 'That Telegram account is already an admin.', { telegramUsername: 'Already an admin' })
+    }
+    throw error
+  }
+}
+
+export const fromPlayerBody = createBody.pick({ name: true, username: true, role: true })
+
+const TELEGRAM_USERNAME = /^[a-z0-9_]{5,32}$/
+
+/**
+ * Makes an existing player an admin. Their Telegram account is bound at once
+ * by its id (taken from the player's signed sign-in, so it is trusted), not by
+ * a username they could change. The sign-in still needs the master password and
+ * the generated password, shown once to the super admin.
+ */
+export async function createFromPlayer(
+  ctx: AppContext,
+  byAdminId: string,
+  userId: string,
+  body: z.infer<typeof fromPlayerBody>,
+): Promise<{ admin: AdminAccount; password: string }> {
+  const [player] = await ctx.db.select({ id: users.id, telegramId: users.telegramId, tgUsername: users.tgUsername }).from(users).where(eq(users.id, userId))
+  if (!player) throw new HttpError('NOT_FOUND', 'No such player.')
+  const [existing] = await ctx.db.select({ name: adminUsers.name }).from(adminUsers).where(eq(adminUsers.telegramId, player.telegramId))
+  if (existing) throw new HttpError('INVALID_INPUT', `This Telegram account is already the admin ${existing.name}.`)
+  const tgUsername = player.tgUsername?.toLowerCase() ?? null
+  const telegramUsername = tgUsername && TELEGRAM_USERNAME.test(tgUsername) ? tgUsername : null
+  const password = generatePassword()
+  const passwordHash = await hashPassword(password)
+  try {
+    const row = await ctx.db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(adminUsers)
+        .values({ name: body.name, username: body.username, telegramId: player.telegramId, telegramUsername, role: body.role, passwordHash })
+        .returning()
+      if (!created) throw new Error('admin insert returned no row')
+      await appendAudit(tx, {
+        adminId: byAdminId,
+        action: 'admin.create',
+        targetType: 'admin',
+        targetId: created.id,
+        after: { ...body, fromPlayer: player.id, telegramId: player.telegramId, telegramUsername },
+      })
+      return created
+    })
+    await recordSecurityEvent(ctx.db, ctx.log, {
+      severity: 'high',
+      category: 'admin',
+      kind: 'admin_created',
+      ipHash: null,
+      route: 'POST /admin/v1/users/:id/make-admin',
+      details: { byAdminId, adminId: row.id, role: body.role, fromPlayer: player.id },
+    })
+    return { admin: toAccount(row), password }
+  } catch (error) {
+    const c = uniqueViolation(error)
+    if (c === 'admin_users_username_key') throw new HttpError('INVALID_INPUT', 'That admin username is taken.', { username: 'Taken' })
+    if (c === 'admin_users_telegram_id_key') throw new HttpError('INVALID_INPUT', 'This Telegram account is already an admin.')
+    if (c === 'admin_users_telegram_username_key') {
+      throw new HttpError('INVALID_INPUT', `Another admin is waiting to be bound to @${telegramUsername}. Disable or fix that admin first.`)
     }
     throw error
   }

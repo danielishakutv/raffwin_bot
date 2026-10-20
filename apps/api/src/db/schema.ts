@@ -648,7 +648,7 @@ export const auditLog = pgTable(
   (t) => [uniqueIndex('audit_log_seq_key').on(t.seq), index('audit_log_target_idx').on(t.targetType, t.targetId)],
 )
 
-export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel', 'admin_risk_flag', 'admin_risk_clear', 'sales_options_change', 'voucher_batch_create'] as const
+export const APPROVAL_ACTIONS = ['rate_base_change', 'balance_adjustment', 'raffle_cancel', 'admin_risk_flag', 'admin_risk_clear', 'sales_options_change', 'voucher_batch_create', 'balance_adjustment_bulk'] as const
 
 /** Maker-checker: a sensitive action runs only when a second admin approves it. */
 export const approvals = pgTable(

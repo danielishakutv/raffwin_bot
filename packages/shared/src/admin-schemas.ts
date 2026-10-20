@@ -134,6 +134,24 @@ export const adjustmentBody = reasonBody.extend({
     .refine((n) => Math.abs(n) <= 1_000_000, 'At most 1,000,000 Raffs in one adjustment'),
 })
 
+/** One bulk adjustment: the same amount for every selected player, all or none */
+export const BULK_ADJUST_MAX_PLAYERS = 500
+/** Guards against a typo multiplied by hundreds of players */
+export const BULK_ADJUST_MAX_TOTAL = 10_000_000
+
+export const bulkAdjustmentBody = adjustmentBody
+  .extend({
+    userIds: z
+      .array(z.string().uuid())
+      .min(1, 'Select at least one player')
+      .max(BULK_ADJUST_MAX_PLAYERS, `At most ${BULK_ADJUST_MAX_PLAYERS} players at a time`)
+      .refine((ids) => new Set(ids).size === ids.length, 'A player is selected twice'),
+  })
+  .refine((b) => Math.abs(b.raffs) * b.userIds.length <= BULK_ADJUST_MAX_TOTAL, {
+    message: `At most ${BULK_ADJUST_MAX_TOTAL.toLocaleString('en-NG')} Raffs in all in one bulk adjustment`,
+    path: ['raffs'],
+  })
+
 export const decisionBody = z.object({
   note: z.string().trim().max(500).default(''),
 })
@@ -253,3 +271,4 @@ export type ExpenseBody = z.infer<typeof expenseBody>
 export type RateBaseBody = z.infer<typeof rateBaseBody>
 export type LimitsBody = z.infer<typeof limitsBody>
 export type AdjustmentBody = z.infer<typeof adjustmentBody>
+export type BulkAdjustmentBody = z.infer<typeof bulkAdjustmentBody>

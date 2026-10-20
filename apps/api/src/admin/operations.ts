@@ -402,6 +402,10 @@ export async function userDetail(ctx: AppContext, id: string): Promise<AdminUser
     .orderBy(desc(notifications.createdAt))
     .limit(30)
   const [delivery] = await ctx.db.select().from(deliveryPoints).where(eq(deliveryPoints.userId, id))
+  const [admin] = await ctx.db
+    .select({ name: adminUsers.name, role: adminUsers.role, status: adminUsers.status })
+    .from(adminUsers)
+    .where(eq(adminUsers.telegramId, row.u.telegramId))
   // The streak is current while its last claim was today or yesterday (Lagos days)
   const today = lagosDay(ctx.now())
   const yesterday = lagosDay(ctx.now() - 86_400_000)
@@ -409,6 +413,7 @@ export async function userDetail(ctx: AppContext, id: string): Promise<AdminUser
   const current = lastDay === today || lastDay === yesterday ? (streak?.lastStreak ?? 0) : 0
   return {
     user: { ...toSummary(u, row.referredBy), referralCode: u.referralCode, tgUsername: u.tgUsername, createdAt: u.createdAt.toISOString() },
+    admin: admin ?? null,
     ledgerBalance: sum?.n ?? 0,
     ledger: ledgerRows.map((l) => ({
       id: l.id,

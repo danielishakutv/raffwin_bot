@@ -135,6 +135,8 @@ export interface AdminLedgerRow {
 
 export interface AdminUserDetail {
   user: AdminUserSummary & { referralCode: string; tgUsername: string | null; createdAt: string }
+  /** The admin account bound to this player's Telegram account, if there is one */
+  admin: { name: string; role: AdminRole; status: 'active' | 'disabled' } | null
   /** SUM(ledger) recomputed now; must equal user.balance */
   ledgerBalance: number
   ledger: AdminLedgerRow[]
@@ -276,7 +278,7 @@ export interface AdminEngagement {
 
 export interface AdminApproval {
   id: string
-  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel' | 'admin_risk_flag' | 'admin_risk_clear' | 'sales_options_change' | 'voucher_batch_create'
+  action: 'rate_base_change' | 'balance_adjustment' | 'raffle_cancel' | 'admin_risk_flag' | 'admin_risk_clear' | 'sales_options_change' | 'voucher_batch_create' | 'balance_adjustment_bulk'
   /** One line a human can approve or reject from */
   summary: string
   payload: Record<string, unknown>
